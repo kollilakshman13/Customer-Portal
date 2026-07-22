@@ -1,0 +1,318 @@
+{% extends "templates/web.html" %}
+
+{% block head %}
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+{% endblock %}
+
+{% block navbar %}{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block page_container %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap%22 rel="
+        stylesheet">
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css">
+    
+    <div class="pf-shell">
+        <!-- Sidebar Backdrop -->
+        <div class="pf-sidebar-backdrop" id="sidebar-backdrop" onclick="toggleMobileSidebar(false)"></div>
+        
+
+        <!-- Sidebar -->
+        <div class="pf-side">
+            <div class="pf-brand">
+                <img src="/assets/customer_portal/images/logo (3).png" alt="Logo" style="max-height: 40px; max-width: 100%; object-fit: contain;">
+            </div>
+            <nav class="pf-nav">
+                <a class="on" onclick="pfGo('overview',this)"><i class="ti ti-layout-dashboard"></i> Overview</a>
+                <a onclick="pfGo('renewals',this)"><i class="ti ti-refresh"></i> Renewals</a>
+                <a onclick="pfGo('invoices',this)"><i class="ti ti-file-invoice"></i> Invoices</a>
+                <a onclick="pfGo('orders',this)"><i class="ti ti-package"></i> Orders</a>
+                <a onclick="pfGo('support',this)"><i class="ti ti-headset"></i> Support</a>
+                <a onclick="pfGo('contacts',this)"><i class="ti ti-users"></i> Contacts</a>
+                <a onclick="pfGo('settings',this)"><i class="ti ti-settings"></i> Account settings</a>
+            </nav>
+            <div class="pf-side-footer">
+                <div class="pf-account">
+                    <div class="av" id="sidebar-avatar">--</div>
+                    <div class="who"><b id="sidebar-company">Loading...</b><span id="sidebar-user" style="display:block;font-size:11.5px;color:var(--ink-soft);">Loading...</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main -->
+        <div class="pf-main">
+
+            <!-- ===== OVERVIEW ===== -->
+            <div class="pf-page on" id="page-overview">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Welcome back, <span id="overview-username">User</span></h1>
+                        <div class="pf-sub">Here's what's happening with your account</div>
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <button class="pf-btn" onclick="pfGoByName('support')"><i class="ti ti-headset"></i> Contact
+                            support</button>
+                        <button class="pf-btn primary" onclick="pfGoByName('renewals')"><i class="ti ti-refresh"></i>
+                            Renew now</button>
+                    </div>
+                </div>
+
+                <div class="pf-banner" id="overview-banner" style="display: none;">
+                    <i class="ti ti-alert-triangle"></i>
+                    <div>
+                        <div class="t" id="overview-banner-title">Your license renews soon</div>
+                        <div class="d" id="overview-banner-subtitle"></div>
+                    </div>
+                    <button class="pf-btn primary act" onclick="pfGoByName('renewals')">Renew now</button>
+                </div>
+
+                <div class="pf-stats">
+                    <div class="pf-stat">
+                        <div class="l">Active licenses</div>
+                        <div class="n" id="stat-active-licenses">0</div>
+                    </div>
+                    <div class="pf-stat">
+                        <div class="l">Open invoices</div>
+                        <div class="n" id="stat-open-invoices">₹0 <small id="stat-open-invoices-sub">· 0 due</small></div>
+                    </div>
+                    <div class="pf-stat">
+                        <div class="l">Open support tickets</div>
+                        <div class="n" id="stat-open-tickets">0</div>
+                    </div>
+                    <div class="pf-stat">
+                        <div class="l">Next renewal</div>
+                        <div class="n" id="stat-next-renewal">-</div>
+                    </div>
+                </div>
+
+                <div class="pf-quick">
+                    <div class="pf-qa" onclick="pfGoByName('invoices')"><i class="ti ti-download"></i>
+                        <div class="t">Download invoice</div>
+                        <div class="d" id="qa-invoice-desc">No invoices</div>
+                    </div>
+                    <div class="pf-qa" onclick="pfGoByName('support')"><i class="ti ti-ticket"></i>
+                        <div class="t">Raise a ticket</div>
+                        <div class="d">Avg. reply in 4h</div>
+                    </div>
+                    <div class="pf-qa" onclick="pfGoByName('contacts')"><i class="ti ti-user-plus"></i>
+                        <div class="t">Add a contact</div>
+                        <div class="d" id="qa-contact-desc">0 on this account</div>
+                    </div>
+                    <div class="pf-qa" onclick="pfGoByName('settings')"><i class="ti ti-file-text"></i>
+                        <div class="t">View details</div>
+                        <div class="d" id="qa-settings-desc">Manage account</div>
+                    </div>
+                </div>
+
+                <div class="pf-section" id="overview-order-section" style="display: none;">
+                    <div class="pf-section-head">
+                        <h3 id="overview-order-title">Order # — in progress</h3><a onclick="pfGoByName('orders')">View details</a>
+                    </div>
+                    <div class="pf-track" id="overview-order-track">
+                    </div>
+                    <div id="overview-order-footer" style="padding:6px 18px 16px;font-size:12px;color:var(--ink-soft);"></div>
+                </div>
+
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3>Recent invoices</h3><a onclick="pfGoByName('invoices')">View all</a>
+                    </div>
+                    <div id="overview-invoices-list">
+                    </div>
+                </div>
+
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3>Support tickets</h3><a onclick="pfGoByName('support')">Raise new</a>
+                    </div>
+                    <div id="overview-tickets-list">
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== RENEWALS ===== -->
+            <div class="pf-page" id="page-renewals">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Renewals</h1>
+                        <div class="pf-sub" id="renewals-sub-title">0 licenses on this account</div>
+                    </div>
+                </div>
+                <div class="pf-section" id="renewals-list">
+                </div>
+                <div class="pf-list-footer">
+                    <div class="pf-page-size-selector">
+                        <span>Show:</span>
+                        <select id="renewal-page-size" onchange="changePageSize('renewals')">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="pf-record-count" id="renewal-record-count">Showing 0 of 0</div>
+                    <button class="pf-btn-more" id="renewal-load-more" onclick="loadMoreRecords('renewals')">Load More</button>
+                </div>
+            </div>
+
+            <!-- ===== INVOICES ===== -->
+            <div class="pf-page" id="page-invoices">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Invoices</h1>
+                        <div class="pf-sub" id="invoices-sub-title">0 invoices on this account</div>
+                    </div>
+                </div>
+                <div class="pf-toolbar">
+                    <div class="pf-search"><i class="ti ti-search"></i><input id="invoice-search-input" placeholder="Search by invoice number…" oninput="filterInvoices()">
+                    </div>
+                    <div class="pf-filterchip"><i class="ti ti-filter"></i> Status: <select id="invoice-status-filter" onchange="filterInvoices()"><option value="All">All</option></select></div>
+                </div>
+                <div class="pf-section" id="invoices-list">
+                </div>
+                <div class="pf-list-footer">
+                    <div class="pf-page-size-selector">
+                        <span>Show:</span>
+                        <select id="invoice-page-size" onchange="changePageSize('invoices')">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="pf-record-count" id="invoice-record-count">Showing 0 of 0</div>
+                    <button class="pf-btn-more" id="invoice-load-more" onclick="loadMoreRecords('invoices')">Load More</button>
+                </div>
+            </div>
+
+            <!-- ===== ORDERS ===== -->
+            <div class="pf-page" id="page-orders">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Orders</h1>
+                        <div class="pf-sub" id="orders-sub-title">0 orders on this account</div>
+                    </div>
+                </div>
+                <div id="orders-list">
+                </div>
+                <div class="pf-list-footer">
+                    <div class="pf-page-size-selector">
+                        <span>Show:</span>
+                        <select id="order-page-size" onchange="changePageSize('orders')">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="pf-record-count" id="order-record-count">Showing 0 of 0</div>
+                    <button class="pf-btn-more" id="order-load-more" onclick="loadMoreRecords('orders')">Load More</button>
+                </div>
+            </div>
+
+            <!-- ===== SUPPORT ===== -->
+            <div class="pf-page" id="page-support">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Support</h1>
+                        <div class="pf-sub">Raise a ticket or check on an existing one</div>
+                    </div>
+                </div>
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3>Open tickets</h3>
+                    </div>
+                    <div id="support-tickets-list">
+                    </div>
+                    <div class="pf-list-footer" style="margin-top: 0; border-top: 1px solid var(--line); border-left: none; border-right: none; border-bottom: none; border-radius: 0 0 12px 12px;">
+                        <div class="pf-page-size-selector">
+                            <span>Show:</span>
+                            <select id="support-page-size" onchange="changePageSize('support')">
+                                <option value="10" selected>10</option>
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                        <div class="pf-record-count" id="support-record-count">Showing 0 of 0</div>
+                        <button class="pf-btn-more" id="support-load-more" onclick="loadMoreRecords('support')">Load More</button>
+                    </div>
+                </div>
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3>Raise a new ticket</h3>
+                    </div>
+                    <div class="pf-form">
+                        <div class="pf-formrow">
+                            <div class="pf-field"><label>Category</label><select id="ticket-category"></select></div>
+                            <div class="pf-field"><label>Priority</label><select id="ticket-priority"></select></div>
+                        </div>
+                        <div class="pf-field"><label>Subject</label><input id="ticket-subject" placeholder="Brief summary of the issue">
+                        </div>
+                        <div class="pf-field"><label>Details</label><textarea id="ticket-details"
+                                placeholder="What's happening, and what have you already tried?"></textarea></div>
+                        <button class="pf-btn primary" onclick="submitTicket()"><i class="ti ti-send"></i> Submit ticket</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== CONTACTS ===== -->
+            <div class="pf-page" id="page-contacts">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Contacts</h1>
+                        <div class="pf-sub" id="contacts-sub-title">0 people on this account</div>
+                    </div>
+                </div>
+                <div class="pf-section" id="contacts-list">
+                </div>
+                <div class="pf-list-footer">
+                    <div class="pf-page-size-selector">
+                        <span>Show:</span>
+                        <select id="contact-page-size" onchange="changePageSize('contacts')">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="pf-record-count" id="contact-record-count">Showing 0 of 0</div>
+                    <button class="pf-btn-more" id="contact-load-more" onclick="loadMoreRecords('contacts')">Load More</button>
+                </div>
+            </div>
+
+            <!-- ===== SETTINGS ===== -->
+            <div class="pf-page" id="page-settings">
+                <div class="pf-top">
+                    <div>
+                        <h1 class="pf-h1">Account settings</h1>
+                        <div class="pf-sub">Manage your company details and preferences</div>
+                    </div>
+                </div>
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3>Company details</h3>
+                    </div>
+                    <div class="pf-form">
+                        <div class="pf-formrow">
+                            <div class="pf-field"><label>Legal name</label><input id="settings-legal-name">
+                            </div>
+                            <div class="pf-field"><label>GSTIN</label><input id="settings-gstin"></div>
+                        </div>
+                        <div class="pf-field"><label>Billing address</label><input id="settings-address"></div>
+                        <button class="pf-btn primary" onclick="saveSettings()">Save changes</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        window.userEmail = "{{ user_email }}";
+    </script>
+{% endblock %}
