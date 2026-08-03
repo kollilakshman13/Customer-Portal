@@ -10,11 +10,9 @@
 
 {% block page_container %}
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link
-        href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap%22 rel="
-        stylesheet">
-    <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont/dist/tabler-icons.min.css">
     
     <div class="pf-shell">
         <!-- Sidebar Backdrop -->
@@ -36,9 +34,24 @@
                 <a onclick="pfGo('settings',this)"><i class="ti ti-settings"></i> Account settings</a>
             </nav>
             <div class="pf-side-footer">
-                <div class="pf-account">
+                <div class="pf-account" id="pf-account-btn" onclick="toggleAccountDropdown(event)">
                     <div class="av" id="sidebar-avatar">--</div>
-                    <div class="who"><b id="sidebar-company">Loading...</b><span id="sidebar-user" style="display:block;font-size:11.5px;color:var(--ink-soft);">Loading...</span></div>
+                    <div class="who" style="flex:1;overflow:hidden;">
+                        <b id="sidebar-company">Loading...</b>
+                        <span id="sidebar-user" style="display:block;font-size:11.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;">Loading...</span>
+                    </div>
+                    <i class="ti ti-chevron-up" style="color:var(--ink-soft);font-size:14px;margin-left:4px;"></i>
+
+                    <!-- Account Dropdown Menu -->
+                    <div class="pf-account-dropdown" id="pf-account-dropdown" onclick="event.stopPropagation()">
+                        <a class="pf-acc-item" onclick="pfGoByName('settings'); closeAccountDropdown();">
+                            <i class="ti ti-settings"></i> Account Settings
+                        </a>
+                        <div class="pf-acc-divider"></div>
+                        <a class="pf-acc-item pf-acc-logout" onclick="handleLogout()">
+                            <i class="ti ti-logout"></i> Log out
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>
@@ -159,6 +172,646 @@
                 </div>
             </div>
 
+
+            <!-- ===== RENEWAL DETAIL PAGE ===== -->
+            <div class="pf-page" id="page-renewal-detail">
+                <!-- Page top with back nav -->
+                <div class="pf-top">
+                    <div class="pf-detail-top-left">
+                        <button class="pf-back-btn" onclick="pfGoByName('renewals')">
+                            <i class="ti ti-arrow-left"></i> Back to Renewals
+                        </button>
+                        <h1 class="pf-h1" id="rd-name">Renewal</h1>
+                        <div class="pf-sub" id="rd-product">-</div>
+                    </div>
+                    <div id="rd-status-row" class="pf-detail-status-row">
+                        <span class="pf-pill" id="rd-status-pill">-</span>
+                        <span class="pf-detail-amount" id="rd-amount">-</span>
+                    </div>
+                </div>
+
+                <!-- Hero info cards -->
+                <div class="pf-detail-hero">
+                    <div class="pf-detail-hero-card indigo">
+                        <div class="pf-dhc-icon"><i class="ti ti-calendar-event"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Start Date</div>
+                            <div class="pf-dhc-val" id="rd-start">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card amber">
+                        <div class="pf-dhc-icon"><i class="ti ti-calendar-due"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">End / Renewal Date</div>
+                            <div class="pf-dhc-val" id="rd-end">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card green">
+                        <div class="pf-dhc-icon"><i class="ti ti-users"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Seats</div>
+                            <div class="pf-dhc-val" id="rd-qty">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card purple">
+                        <div class="pf-dhc-icon"><i class="ti ti-currency-rupee"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Total Amount</div>
+                            <div class="pf-dhc-val" id="rd-amount-hero">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detail sections -->
+                <div class="pf-detail-grid">
+
+                    <!-- Left column -->
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Renewal Details</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Renewal ID</div>
+                                    <div class="pf-dg-val pf-dg-mono" id="rd-id">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Invoice No.</div>
+                                    <div class="pf-dg-val pf-dg-mono" id="rd-invoice">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Rate per Seat</div>
+                                    <div class="pf-dg-val" id="rd-rate">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Company</div>
+                                    <div class="pf-dg-val" id="rd-company">-</div>
+                                </div>
+                                <div class="pf-dg-item" id="rd-domain-wrap">
+                                    <div class="pf-dg-label">Domain</div>
+                                    <div class="pf-dg-val" id="rd-domain">-</div>
+                                </div>
+                                <div class="pf-dg-item" id="rd-opp-wrap">
+                                    <div class="pf-dg-label">Opportunity ID</div>
+                                    <div class="pf-dg-val" id="rd-opp">-</div>
+                                </div>
+                                <div class="pf-dg-item" id="rd-sla-wrap">
+                                    <div class="pf-dg-label">SLA Type</div>
+                                    <div class="pf-dg-val" id="rd-sla">-</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Items Table Section -->
+                        <div class="pf-section" id="rd-items-wrap">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-box" style="margin-right:6px;color:var(--indigo)"></i>Items Included (<span id="rd-items-count">0</span>)</h3>
+                            </div>
+                            <div class="pf-table-wrapper">
+                                <table class="pf-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Item / Product</th>
+                                            <th style="text-align:center;">Qty</th>
+                                            <th style="text-align:right;">Rate</th>
+                                            <th style="text-align:right;">Amount</th>
+                                            <th style="text-align:center;">Period</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rd-items-tbody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Description / Notes -->
+                        <div class="pf-section" id="rd-desc-wrap" style="display:none;">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-notes" style="margin-right:6px;color:var(--indigo)"></i>Description</h3>
+                            </div>
+                            <div class="pf-detail-text" id="rd-desc"></div>
+                        </div>
+                        <div class="pf-section" id="rd-note-wrap" style="display:none;">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-message" style="margin-right:6px;color:var(--indigo)"></i>Notes</h3>
+                            </div>
+                            <div class="pf-detail-text" id="rd-note"></div>
+                        </div>
+                    </div>
+
+                    <!-- Right column -->
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-user-circle" style="margin-right:6px;color:var(--indigo)"></i>Account Team</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner pf-dg-1col">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Salesperson</div>
+                                    <div class="pf-dg-val" id="rd-sales-user">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Renewal Owner</div>
+                                    <div class="pf-dg-val" id="rd-owner">-</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Days left countdown -->
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-clock" style="margin-right:6px;color:var(--indigo)"></i>Renewal Timeline</h3>
+                            </div>
+                            <div class="pf-detail-countdown" id="rd-countdown-wrap">
+                                <div class="pf-dc-number" id="rd-days-left">-</div>
+                                <div class="pf-dc-label" id="rd-days-label">days until renewal</div>
+                                <div class="pf-dc-bar-wrap">
+                                    <div class="pf-dc-bar" id="rd-progress-bar"></div>
+                                </div>
+                                <div class="pf-dc-dates">
+                                    <span id="rd-tl-start">-</span>
+                                    <span id="rd-tl-end">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== INVOICE DETAIL PAGE ===== -->
+            <div class="pf-page" id="page-invoice-detail">
+                <div class="pf-top">
+                    <div class="pf-detail-top-left">
+                        <button class="pf-back-btn" onclick="pfGoByName('invoices')">
+                            <i class="ti ti-arrow-left"></i> Back to Invoices
+                        </button>
+                        <h1 class="pf-h1" id="id-name">Invoice</h1>
+                        <div class="pf-sub" id="id-sub">Sales Invoice Details</div>
+                    </div>
+                    <div class="pf-detail-status-row">
+                        <span class="pf-pill" id="id-status-pill">-</span>
+                        <span class="pf-detail-amount" id="id-amount">-</span>
+                        <button class="pf-btn primary sm" id="id-download-btn"><i class="ti ti-printer"></i> Download PDF</button>
+                    </div>
+                </div>
+
+                <div class="pf-detail-hero">
+                    <div class="pf-detail-hero-card indigo">
+                        <div class="pf-dhc-icon"><i class="ti ti-calendar-event"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Posting Date</div>
+                            <div class="pf-dhc-val" id="id-posting-date">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card amber">
+                        <div class="pf-dhc-icon"><i class="ti ti-calendar-due"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Due Date</div>
+                            <div class="pf-dhc-val" id="id-due-date">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card purple">
+                        <div class="pf-dhc-icon"><i class="ti ti-currency-rupee"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Grand Total</div>
+                            <div class="pf-dhc-val" id="id-grand-total">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card green">
+                        <div class="pf-dhc-icon"><i class="ti ti-receipt-refund"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Outstanding</div>
+                            <div class="pf-dhc-val" id="id-outstanding">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-detail-grid">
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-box" style="margin-right:6px;color:var(--indigo)"></i>Invoice Items (<span id="id-items-count">0</span>)</h3>
+                            </div>
+                            <div class="pf-table-wrapper">
+                                <table class="pf-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Item / Description</th>
+                                            <th style="text-align:center;">Qty</th>
+                                            <th style="text-align:right;">Rate</th>
+                                            <th style="text-align:right;">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="id-items-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Invoice Summary</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner pf-dg-1col">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Invoice Number</div>
+                                    <div class="pf-dg-val pf-dg-mono" id="id-number">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Company</div>
+                                    <div class="pf-dg-val" id="id-company">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Currency</div>
+                                    <div class="pf-dg-val" id="id-currency">INR</div>
+                                </div>
+                                <div class="pf-dg-item" id="id-remarks-wrap" style="display:none;">
+                                    <div class="pf-dg-label">Remarks</div>
+                                    <div class="pf-dg-val" id="id-remarks"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== ORDER DETAIL PAGE ===== -->
+            <div class="pf-page" id="page-order-detail">
+                <div class="pf-top">
+                    <div class="pf-detail-top-left">
+                        <button class="pf-back-btn" onclick="pfGoByName('orders')">
+                            <i class="ti ti-arrow-left"></i> Back to Orders
+                        </button>
+                        <h1 class="pf-h1" id="od-name">Order</h1>
+                        <div class="pf-sub" id="od-sub">Sales Order Details</div>
+                    </div>
+                    <div class="pf-detail-status-row">
+                        <span class="pf-pill" id="od-status-pill">-</span>
+                        <span class="pf-detail-amount" id="od-amount">-</span>
+                    </div>
+                </div>
+
+                <div class="pf-detail-hero">
+                    <div class="pf-detail-hero-card indigo">
+                        <div class="pf-dhc-icon"><i class="ti ti-calendar-event"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Order Date</div>
+                            <div class="pf-dhc-val" id="od-date">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card amber">
+                        <div class="pf-dhc-icon"><i class="ti ti-truck-delivery"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Delivery Date</div>
+                            <div class="pf-dhc-val" id="od-delivery-date">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card purple">
+                        <div class="pf-dhc-icon"><i class="ti ti-currency-rupee"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Total Amount</div>
+                            <div class="pf-dhc-val" id="od-total">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card green">
+                        <div class="pf-dhc-icon"><i class="ti ti-package-export"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Delivery Status</div>
+                            <div class="pf-dhc-val" id="od-deliv-status">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Delivery Tracking Banner -->
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3><i class="ti ti-truck" style="margin-right:6px;color:var(--indigo)"></i>Order Status & Tracking</h3>
+                    </div>
+                    <div class="pf-track" id="od-track"></div>
+                    <div id="od-track-footer" style="padding:10px 22px 18px;font-size:12.5px;color:var(--ink-soft);"></div>
+                </div>
+
+                <div class="pf-detail-grid">
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-box" style="margin-right:6px;color:var(--indigo)"></i>Ordered Items (<span id="od-items-count">0</span>)</h3>
+                            </div>
+                            <div class="pf-table-wrapper">
+                                <table class="pf-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Item / Description</th>
+                                            <th style="text-align:center;">Qty</th>
+                                            <th style="text-align:center;">Delivered</th>
+                                            <th style="text-align:right;">Rate</th>
+                                            <th style="text-align:right;">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="od-items-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Order Info</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner pf-dg-1col">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Order Number</div>
+                                    <div class="pf-dg-val pf-dg-mono" id="od-number">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Company</div>
+                                    <div class="pf-dg-val" id="od-company">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Status</div>
+                                    <div class="pf-dg-val" id="od-status-val">-</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== SUPPORT TICKET DETAIL PAGE ===== -->
+            <div class="pf-page" id="page-support-detail">
+                <div class="pf-top">
+                    <div class="pf-detail-top-left">
+                        <button class="pf-back-btn" onclick="pfGoByName('support')">
+                            <i class="ti ti-arrow-left"></i> Back to Support
+                        </button>
+                        <h1 class="pf-h1" id="sd-subject">Ticket Subject</h1>
+                        <div class="pf-sub" id="sd-ticket-id">Ticket #</div>
+                    </div>
+                    <div class="pf-detail-status-row">
+                        <span class="pf-pill" id="sd-status-pill">-</span>
+                    </div>
+                </div>
+
+                <div class="pf-detail-hero">
+                    <div class="pf-detail-hero-card indigo">
+                        <div class="pf-dhc-icon"><i class="ti ti-calendar"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Created Date</div>
+                            <div class="pf-dhc-val" id="sd-created">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card amber">
+                        <div class="pf-dhc-icon"><i class="ti ti-flame"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Priority</div>
+                            <div class="pf-dhc-val" id="sd-priority-hero">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card purple">
+                        <div class="pf-dhc-icon"><i class="ti ti-category"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Category</div>
+                            <div class="pf-dhc-val" id="sd-category">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card green">
+                        <div class="pf-dhc-icon"><i class="ti ti-headset"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Assigned Agent</div>
+                            <div class="pf-dhc-val" id="sd-agent-hero">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-detail-grid">
+                    <!-- Left Column -->
+                    <div class="pf-detail-col">
+                        <!-- Issue Description -->
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-align-left" style="margin-right:6px;color:var(--indigo)"></i>Issue Description</h3>
+                            </div>
+                            <div class="pf-detail-text" id="sd-description">No description provided.</div>
+                        </div>
+
+                        <!-- Resolution Details Section -->
+                        <div class="pf-section" id="sd-resolution-section" style="display:none;">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-circle-check" style="margin-right:6px;color:var(--green)"></i>Resolution Details</h3>
+                            </div>
+                            <div class="pf-resolution-box">
+                                <div class="pf-detail-text" id="sd-resolution-text">-</div>
+                                <div style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);display:flex;gap:16px;">
+                                    <span><strong>Resolved On:</strong> <span id="sd-resolution-date">-</span></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Activity & Reply Timeline -->
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-messages" style="margin-right:6px;color:var(--indigo)"></i>Activity & Replies</h3>
+                            </div>
+                            <div class="pf-timeline-container" id="sd-timeline-list">
+                                <div style="padding:16px;text-align:center;color:var(--ink-soft);font-size:13px;">No replies or comments recorded yet.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column -->
+                    <div class="pf-detail-col">
+                        <!-- Ticket Info -->
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Ticket Info</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner pf-dg-1col">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Ticket ID</div>
+                                    <div class="pf-dg-val pf-dg-mono" id="sd-id">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Raised By</div>
+                                    <div class="pf-dg-val" id="sd-raised-by">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Contact Email</div>
+                                    <div class="pf-dg-val" id="sd-email">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Assigned Agent</div>
+                                    <div class="pf-dg-val" id="sd-agent-val">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Last Modified</div>
+                                    <div class="pf-dg-val" id="sd-modified">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Channel</div>
+                                    <div class="pf-dg-val">Customer Portal</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SLA Details -->
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-clock-shield" style="margin-right:6px;color:var(--indigo)"></i>SLA Details</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner pf-dg-1col">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">SLA Status</div>
+                                    <div class="pf-dg-val" id="sd-sla-status">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Target Resolution Time</div>
+                                    <div class="pf-dg-val" id="sd-sla-target">-</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Attachments -->
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-paperclip" style="margin-right:6px;color:var(--indigo)"></i>Attachments</h3>
+                            </div>
+                            <div id="sd-attachments-list" style="display:flex;flex-direction:column;gap:8px;">
+                                <div style="padding:12px;text-align:center;color:var(--ink-soft);font-size:13px;">No attachments for this ticket.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== RAISE NEW SUPPORT TICKET PAGE ===== -->
+            <div class="pf-page" id="page-support-new">
+                <div class="pf-top">
+                    <div class="pf-detail-top-left">
+                        <button class="pf-back-btn" onclick="pfGoByName('support')">
+                            <i class="ti ti-arrow-left"></i> Back to Support
+                        </button>
+                        <h1 class="pf-h1">Raise a New Ticket</h1>
+                        <div class="pf-sub">Submit your technical issue or service request to our support team</div>
+                    </div>
+                </div>
+
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3><i class="ti ti-headset" style="margin-right:6px;color:var(--indigo)"></i>Ticket Information</h3>
+                    </div>
+                    <div class="pf-form" style="padding:22px;">
+                        <div class="pf-formrow">
+                            <div class="pf-field">
+                                <label>Category / Issue Type</label>
+                                <select id="ticket-category"></select>
+                            </div>
+                            <div class="pf-field">
+                                <label>Priority Level</label>
+                                <select id="ticket-priority"></select>
+                            </div>
+                        </div>
+                        <div class="pf-field">
+                            <label>Subject</label>
+                            <input id="ticket-subject" placeholder="Brief summary of the issue (e.g., Unable to access license portal)">
+                        </div>
+                        <div class="pf-field">
+                            <label>Detailed Description</label>
+                            <textarea id="ticket-details" rows="6" placeholder="Describe what is happening, error messages, and what steps you've already tried..."></textarea>
+                        </div>
+                        <div style="display:flex;gap:12px;margin-top:10px;">
+                            <button class="pf-btn primary" onclick="submitTicket()"><i class="ti ti-send"></i> Submit Ticket</button>
+                            <button class="pf-btn" onclick="pfGoByName('support')">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== CONTACT DETAIL PAGE ===== -->
+            <div class="pf-page" id="page-contact-detail">
+                <div class="pf-top">
+                    <div class="pf-detail-top-left">
+                        <button class="pf-back-btn" onclick="pfGoByName('contacts')">
+                            <i class="ti ti-arrow-left"></i> Back to Contacts
+                        </button>
+                        <h1 class="pf-h1" id="cd-fullname">Contact Name</h1>
+                        <div class="pf-sub" id="cd-designation-sub">Designation</div>
+                    </div>
+                    <div class="pf-detail-status-row">
+                        <span class="pf-pill paid" id="cd-primary-pill" style="display:none;">Primary Contact</span>
+                    </div>
+                </div>
+
+                <div class="pf-detail-hero">
+                    <div class="pf-detail-hero-card indigo">
+                        <div class="pf-dhc-icon"><i class="ti ti-user"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Full Name</div>
+                            <div class="pf-dhc-val" id="cd-name-hero">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card purple">
+                        <div class="pf-dhc-icon"><i class="ti ti-mail"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Email</div>
+                            <div class="pf-dhc-val" id="cd-email-hero">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card green">
+                        <div class="pf-dhc-icon"><i class="ti ti-phone"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Phone / Mobile</div>
+                            <div class="pf-dhc-val" id="cd-phone-hero">-</div>
+                        </div>
+                    </div>
+                    <div class="pf-detail-hero-card amber">
+                        <div class="pf-dhc-icon"><i class="ti ti-briefcase"></i></div>
+                        <div class="pf-dhc-body">
+                            <div class="pf-dhc-label">Role / Designation</div>
+                            <div class="pf-dhc-val" id="cd-designation-hero">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-detail-grid">
+                    <div class="pf-detail-col">
+                        <div class="pf-section">
+                            <div class="pf-section-head">
+                                <h3><i class="ti ti-user-check" style="margin-right:6px;color:var(--indigo)"></i>Contact Details</h3>
+                            </div>
+                            <div class="pf-dg pf-dg-inner">
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">First Name</div>
+                                    <div class="pf-dg-val" id="cd-first-name">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Last Name</div>
+                                    <div class="pf-dg-val" id="cd-last-name">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Email Address</div>
+                                    <div class="pf-dg-val" id="cd-email">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Mobile Number</div>
+                                    <div class="pf-dg-val" id="cd-mobile">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Phone Number</div>
+                                    <div class="pf-dg-val" id="cd-phone">-</div>
+                                </div>
+                                <div class="pf-dg-item">
+                                    <div class="pf-dg-label">Designation</div>
+                                    <div class="pf-dg-val" id="cd-designation">-</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- ===== INVOICES ===== -->
             <div class="pf-page" id="page-invoices">
                 <div class="pf-top">
@@ -219,12 +872,18 @@
                 <div class="pf-top">
                     <div>
                         <h1 class="pf-h1">Support</h1>
-                        <div class="pf-sub">Raise a ticket or check on an existing one</div>
+                        <div class="pf-sub" id="support-sub-title">0 tickets on this account</div>
                     </div>
+                    <button class="pf-btn primary sm" onclick="openNewTicketPage()"><i class="ti ti-plus"></i> Raise New Ticket</button>
+                </div>
+                <div class="pf-toolbar">
+                    <div class="pf-search"><i class="ti ti-search"></i><input id="ticket-search-input" placeholder="Search by ticket ID, subject…" oninput="filterTickets()">
+                    </div>
+                    <div class="pf-filterchip"><i class="ti ti-filter"></i> Status: <select id="ticket-status-filter" onchange="filterTickets()"><option value="All">All</option></select></div>
                 </div>
                 <div class="pf-section">
                     <div class="pf-section-head">
-                        <h3>Open tickets</h3>
+                        <h3>Support tickets</h3>
                     </div>
                     <div id="support-tickets-list">
                     </div>
@@ -240,22 +899,6 @@
                         </div>
                         <div class="pf-record-count" id="support-record-count">Showing 0 of 0</div>
                         <button class="pf-btn-more" id="support-load-more" onclick="loadMoreRecords('support')">Load More</button>
-                    </div>
-                </div>
-                <div class="pf-section">
-                    <div class="pf-section-head">
-                        <h3>Raise a new ticket</h3>
-                    </div>
-                    <div class="pf-form">
-                        <div class="pf-formrow">
-                            <div class="pf-field"><label>Category</label><select id="ticket-category"></select></div>
-                            <div class="pf-field"><label>Priority</label><select id="ticket-priority"></select></div>
-                        </div>
-                        <div class="pf-field"><label>Subject</label><input id="ticket-subject" placeholder="Brief summary of the issue">
-                        </div>
-                        <div class="pf-field"><label>Details</label><textarea id="ticket-details"
-                                placeholder="What's happening, and what have you already tried?"></textarea></div>
-                        <button class="pf-btn primary" onclick="submitTicket()"><i class="ti ti-send"></i> Submit ticket</button>
                     </div>
                 </div>
             </div>

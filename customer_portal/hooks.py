@@ -59,10 +59,20 @@ app_license = "mit"
 # application home page (will override Website Settings)
 # home_page = "login"
 
+website_route_rules = [
+    {"from_route": "/customer-portal/<path:app_path>", "to_route": "customer-portal"}
+]
+
 # website user home page (by Role)
 # role_home_page = {
 # 	"Role": "home_page"
 # }
+
+role_home_page = {
+    "Customer": "customer-portal"
+}
+
+get_website_user_home_page = "customer_portal.api.get_website_user_home_page"
 
 # Generators
 # ----------
