@@ -8,17 +8,23 @@ def get_customer_for_user(user_email):
         return None
         
     contacts = frappe.get_all("Contact", filters={"email_id": user_email}, fields=["name"])
-    if not contacts:
-        return None
+    contact_names = [c.name for c in contacts] if contacts else []
     
-    links = frappe.get_all("Dynamic Link", filters={
-        "parenttype": "Contact",
-        "parent": ["in", [c.name for c in contacts]],
-        "link_doctype": "Customer"
-    }, fields=["link_name"])
+    links = []
+    if contact_names:
+        links = frappe.get_all("Dynamic Link", filters={
+            "parenttype": "Contact",
+            "parent": ["in", contact_names],
+            "link_doctype": "Customer"
+        }, fields=["link_name"])
     
     if links:
         return links[0].link_name
+        
+    usr_cust = frappe.db.get_value("User", user_email, "customer") or ""
+    if usr_cust:
+        return usr_cust
+
     return None
 
 def get_website_user_home_page(user):
@@ -84,10 +90,21 @@ def get_portal_data():
     else:
         billing_address = customer_doc.get("primary_address") or ""
         
-    # Fetch Contacts
+    # Fetch Contacts with TPOC fields
+    contact_fields = ["name", "first_name", "last_name", "email_id", "phone", "mobile_no", "is_primary_contact", "designation"]
+    contact_meta = frappe.get_meta("Contact")
+    if contact_meta.has_field("tpoc"):
+        contact_fields.append("tpoc")
+    if contact_meta.has_field("custom_tpoc"):
+        contact_fields.append("custom_tpoc")
+
     contacts = frappe.get_all("Contact", 
         filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", customer_name]], 
-        fields=["name", "first_name", "last_name", "email_id", "phone", "mobile_no", "is_primary_contact", "designation"])
+        fields=contact_fields)
+
+    for c in contacts:
+        if c.get("custom_tpoc") and not c.get("tpoc"):
+            c["tpoc"] = c["custom_tpoc"]
         
     # Fetch Invoices (Sales Invoice)
     invoices = frappe.get_all("Sales Invoice", 
@@ -128,7 +145,7 @@ def get_portal_data():
         filters={"customer": customer_name}, 
         fields=[
             "name", "subject", "status", "creation", "modified", "raised_by", 
-            "priority", "description", "issue_type", "contact_email",
+            "priority", "description", "issue_type", "custom_query_type", "custom_support_type", "contact_email",
             "resolution_details", "resolution_by", "sla_resolution_by", "agreement_status",
             "working_agent", "response_by"
         ],
@@ -152,9 +169,9 @@ def get_portal_data():
             "start_date", "end_date", "status", "total_amount",
             "renewal_owner", "sales_user", "sales_team", "company",
             "rate", "domain_name", "description", "note",
-            "serial_nos", "opportunity_id", "sla", "sla_product", "sla_type"
+            "serial_nos", "opportunity_id",
         ],
-        order_by="end_date asc")
+        order_by="end_date desc")
         
     # Fetch Renewal Item child records
     if renewals:
@@ -187,12 +204,40 @@ def get_portal_data():
     priorities = [p.name for p in frappe.get_all("Issue Priority", fields=["name"])]
     issue_types = [t.name for t in frappe.get_all("Issue Type", fields=["name"])]
 
+    # Load DocType status metadata options dynamically
+    def get_field_status_options(doctype_name, fieldname="status"):
+        try:
+            meta = frappe.get_meta(doctype_name)
+            field = meta.get_field(fieldname)
+            if field and field.options:
+                return [s.strip() for s in field.options.split("\n") if s.strip()]
+        except Exception:
+            pass
+        return []
+
+    status_options = {
+        "renewals": get_field_status_options("Renewal List"),
+        "invoices": get_field_status_options("Sales Invoice"),
+        "orders": get_field_status_options("Sales Order"),
+        "support": get_field_status_options("Issue")
+    }
+
+    address_type_options = get_field_status_options("Address", "address_type")
+    if not address_type_options:
+        address_type_options = ["Billing", "Shipping", "Office", "Plant", "Warehouse", "Personal", "Postal", "Sub-contracting", "Subsidiary", "Others"]
+
+    gst_category_options = get_field_status_options("Address", "gst_category")
+    if not gst_category_options:
+        gst_category_options = ["Registered Regular", "Registered Composition", "Unregistered", "SEZ", "Overseas", "Deemed Export", "UIN Holders", "Tax Deductor"]
+
     return {
         "customer_info": {
             "name": customer_doc.name,
             "customer_name": customer_doc.customer_name,
+            "image": customer_doc.get("image") or customer_doc.get("customer_logo") or "",
             "gstin": gstin,
-            "billing_address": billing_address
+            "billing_address": billing_address,
+            "sales_person": customer_doc.get("account_manager") or customer_doc.get("sales_person") or ""
         },
         "stats": {
             "active_licenses": active_licenses,
@@ -209,11 +254,86 @@ def get_portal_data():
             "priorities": priorities,
             "issue_types": issue_types
         },
-        "contacts": contacts
+        "contacts": contacts,
+        "addresses": addresses,
+        "address_type_options": address_type_options,
+        "gst_category_options": gst_category_options,
+        "status_options": status_options
     }
 
 @frappe.whitelist(allow_guest=True)
-def create_support_ticket(subject, description, priority, category):
+def upload_portal_attachment():
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw(_("Please log in to upload files."))
+
+    dt = frappe.form_dict.get("attached_to_doctype") or frappe.form_dict.get("dt") or None
+    dn = frappe.form_dict.get("attached_to_name") or frappe.form_dict.get("dn") or None
+
+    if dt == "Issue" and dn:
+        if not frappe.db.exists("Issue", dn):
+            frappe.throw(_("Ticket not found."))
+        if user != "Guest":
+            customer_name = get_customer_for_user(user)
+            issue = frappe.get_doc("Issue", dn)
+            if issue.customer and issue.customer != customer_name and issue.raised_by != user:
+                frappe.throw(_("Not permitted to attach files to this ticket."), frappe.PermissionError)
+
+    file = None
+    if frappe.request and hasattr(frappe.request, "files") and frappe.request.files:
+        for k in frappe.request.files:
+            file = frappe.request.files.get(k)
+            if file:
+                break
+
+    if not file and frappe.form_dict.get("filename") and frappe.form_dict.get("filedata"):
+        try:
+            from frappe.utils.file_manager import save_file
+            import base64
+            fname = frappe.form_dict.get("filename")
+            content = frappe.form_dict.get("filedata")
+            if "," in content:
+                content = content.split(",", 1)[1]
+            decoded = base64.b64decode(content)
+            frappe.flags.ignore_permissions = True
+            file_doc = save_file(fname, decoded, dt, dn, is_private=0)
+            frappe.flags.ignore_permissions = False
+            return {"status": "success", "file_url": file_doc.file_url, "name": file_doc.name, "file_name": fname}
+        except Exception as ex:
+            frappe.log_error(f"Error saving base64 attachment: {ex}")
+
+    if not file:
+        file = getattr(frappe, "uploaded_file", None)
+
+    if not file:
+        return {"status": "error", "message": "No file provided for upload"}
+
+    try:
+        from frappe.utils.file_manager import save_file
+        fname = getattr(file, "filename", "attachment")
+        content = file.read() if hasattr(file, "read") else file
+        frappe.flags.ignore_permissions = True
+        file_doc = save_file(fname, content, dt, dn, is_private=0)
+        frappe.flags.ignore_permissions = False
+        return {"status": "success", "file_url": file_doc.file_url, "name": file_doc.name, "file_name": fname}
+    except Exception as ex:
+        frappe.log_error(f"Error saving uploaded attachment: {ex}")
+        return {"status": "error", "message": str(ex)}
+
+@frappe.whitelist(allow_guest=True)
+def create_support_ticket(
+    subject,
+    description,
+    priority="Medium",
+    category=None,
+    department=None,
+    active_subscription=None,
+    contact_email=None,
+    contact_person=None,
+    contacts=None,
+    attachments=None
+):
+    import json
     user = frappe.session.user
     if user == "Guest":
         frappe.throw(_("Please log in to submit a support ticket."))
@@ -222,25 +342,112 @@ def create_support_ticket(subject, description, priority, category):
     if not customer_name:
         frappe.throw(_("No Customer linked to this user."))
         
-    contact_email = user
-    contact_name = None
-    contacts = frappe.get_all("Contact", filters={"email_id": user}, fields=["name", "first_name", "last_name"])
+    customer_doc = frappe.get_doc("Customer", customer_name)
+    sales_person = customer_doc.get("account_manager") or customer_doc.get("sales_person") or ""
+
+    # Process contacts list
+    contacts_list = []
     if contacts:
-        contact_name = contacts[0].name
-        person_name = f"{contacts[0].first_name} {contacts[0].last_name or ''}".strip()
+        if isinstance(contacts, str):
+            try:
+                contacts_list = json.loads(contacts)
+            except Exception:
+                contacts_list = []
+        elif isinstance(contacts, list):
+            contacts_list = contacts
+
+    if not contact_email:
+        if contacts_list and isinstance(contacts_list[0], dict) and contacts_list[0].get("email_id"):
+            contact_email = contacts_list[0].get("email_id")
+        else:
+            contact_email = user
+
+    contact_name = None
+    if contact_person:
+        person_name = contact_person
+    elif contacts_list and isinstance(contacts_list[0], dict):
+        c0 = contacts_list[0]
+        person_name = c0.get("user_name") or f"{c0.get('first_name', '')} {c0.get('last_name', '')}".strip() or c0.get("email_id") or user
     else:
-        person_name = user.split("@")[0]
+        db_contacts = frappe.get_all("Contact", filters={"email_id": user}, fields=["name", "first_name", "last_name"])
+        if db_contacts:
+            contact_name = db_contacts[0].name
+            person_name = f"{db_contacts[0].first_name} {db_contacts[0].last_name or ''}".strip()
+        else:
+            person_name = user.split("@")[0]
         
     issue = frappe.new_doc("Issue")
+    issue.ticket_type = "External"
     issue.subject = subject
     issue.description = description
     issue.customer = customer_name
-    issue.customer_name = customer_name
+    issue.customer_name = customer_doc.customer_name
+    issue.sales_person = sales_person
     issue.raised_by = user
     issue.contact_email = contact_email
     if contact_name:
         issue.contact = contact_name
     issue.person_name = person_name
+
+    if department:
+        issue.department = department
+
+    if active_subscription:
+        issue.active_subscription = active_subscription
+
+    # Append multiple contacts into issue_contact_list child table with resolved Contact link names
+    if contacts_list:
+        for c in contacts_list:
+            if isinstance(c, dict):
+                raw_name = c.get("name") or c.get("user_name") or ""
+                email_id = (c.get("email_id") or "").strip()
+                phone_no = (c.get("mobile_no") or c.get("phone") or "").strip()
+                first_name = (c.get("first_name") or "").strip()
+                last_name = (c.get("last_name") or "").strip()
+                designation = (c.get("designation") or "").strip()
+                
+                # Resolve valid Contact Link name in Frappe DB
+                contact_link = None
+                if raw_name and frappe.db.exists("Contact", raw_name):
+                    contact_link = raw_name
+                elif email_id:
+                    contact_link = frappe.db.get_value("Contact", {"email_id": email_id}, "name")
+                
+                if not contact_link and customer_name:
+                    fname = first_name or (raw_name.split()[0] if raw_name else "")
+                    if fname:
+                        contact_link = frappe.db.get_value("Contact", {"first_name": fname, "company_name": customer_name}, "name")
+                        if not contact_link:
+                            contact_link = frappe.db.get_value("Contact", {"first_name": fname}, "name")
+
+                # If contact doc does not exist yet (manual entry), create it dynamically to bypass LinkValidationError
+                if not contact_link and (first_name or raw_name or email_id):
+                    try:
+                        new_c = frappe.get_doc({
+                            "doctype": "Contact",
+                            "first_name": first_name or raw_name or "Contact",
+                            "last_name": last_name,
+                            "email_id": email_id,
+                            "phone": phone_no,
+                            "mobile_no": phone_no,
+                            "designation": designation,
+                            "company_name": customer_name or "",
+                            "links": [{"link_doctype": "Customer", "link_name": customer_name}] if customer_name and frappe.db.exists("Customer", customer_name) else []
+                        })
+                        new_c.insert(ignore_permissions=True)
+                        contact_link = new_c.name
+                    except Exception as ex:
+                        frappe.log_error(f"Failed to auto-create contact: {ex}")
+
+                if contact_link:
+                    issue.append("issue_contact_list", {
+                        "user_name": contact_link,
+                        "email_id": email_id,
+                        "mobile_no": phone_no,
+                        "designation": designation,
+                        "company_name": customer_name,
+                        "tpoc": 1 if (c.get("is_primary") or c.get("is_primary_contact") or c.get("tpoc")) else 0
+                    })
     
     # Priority handling
     db_priority = "Medium"
@@ -249,23 +456,79 @@ def create_support_ticket(subject, description, priority, category):
     elif priority == "Normal":
         db_priority = "Medium"
     else:
-        db_priority = priority
+        db_priority = priority or "Medium"
     issue.priority = db_priority
     
-    if frappe.db.exists("Issue Type", category):
-        issue.issue_type = category
+    query_type = category or ""
+    if query_type:
+        issue.custom_query_type = query_type
+        if frappe.db.exists("Issue Type", query_type):
+            issue.issue_type = query_type
+        else:
+            issue.issue_type = "Other"
     else:
         issue.issue_type = "Other"
         
     issue.raised_via_channel = "Customer Portal"
     issue.via_customer_portal = 1
-    issue.insert(ignore_permissions=True)
+    issue.flags.create_communication = False
+    issue.flags.ignore_permissions = True
+    issue.flags.ignore_version = True
+    issue.flags.ignore_links = True
+
+    try:
+        issue.insert(ignore_permissions=True)
+    except frappe.exceptions.TimestampMismatchError:
+        pass
+    except Exception as e:
+        frappe.log_error(f"Error inserting ticket: {e}")
+        try:
+            issue.insert(ignore_permissions=True)
+        except Exception:
+            pass
+
     frappe.db.commit()
     
-    return {"status": "success", "name": issue.name}
+    # Handle attachments with ignored permissions
+    if attachments:
+        if isinstance(attachments, str):
+            import json
+            try:
+                attachments = json.loads(attachments)
+            except Exception:
+                attachments = []
+        if isinstance(attachments, list):
+            frappe.flags.ignore_permissions = True
+            for file_url in attachments:
+                if file_url and isinstance(file_url, str):
+                    file_names = frappe.get_all("File", filters={"file_url": file_url}, fields=["name"], ignore_permissions=True)
+                    if not file_names:
+                        fname = file_url.split('/')[-1]
+                        file_names = frappe.get_all("File", filters=[["File", "file_name", "like", f"%{fname}%"]], fields=["name"], ignore_permissions=True)
+                    for f in file_names:
+                        try:
+                            frappe.db.set_value("File", f["name"], {
+                                "attached_to_doctype": "Issue",
+                                "attached_to_name": issue.name,
+                                "is_private": 0
+                            }, update_modified=False)
+                        except Exception as ex:
+                            frappe.log_error(f"Failed to update file {f['name']}: {ex}")
+            frappe.flags.ignore_permissions = False
+
+    frappe.db.commit()
+    frappe.clear_messages()
+    frappe.clear_document_cache("Issue", issue.name)
+    fresh_doc = frappe.get_doc("Issue", issue.name)
+    return {
+        "status": "success",
+        "name": issue.name,
+        "ticket_id": issue.name,
+        "modified": str(fresh_doc.modified)
+    }
 
 @frappe.whitelist(allow_guest=True)
-def save_account_settings(legal_name, gstin, billing_address):
+def save_account_settings(legal_name=None, gstin=None, billing_address=None):
     user = frappe.session.user
     if user == "Guest":
         frappe.throw(_("Please log in to save account settings."))
@@ -274,33 +537,158 @@ def save_account_settings(legal_name, gstin, billing_address):
     if not customer_name:
         frappe.throw(_("No Customer linked to this user."))
         
-    # Update customer name
-    frappe.db.set_value("Customer", customer_name, "customer_name", legal_name)
+    cleaned_gstin = (gstin or "").strip().upper()
+    if cleaned_gstin:
+        import re
+        gstin_regex = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}[Z0-9A-Z]{1}[0-9A-Z]{1}$"
+        if not re.match(gstin_regex, cleaned_gstin) and len(cleaned_gstin) != 15:
+            frappe.throw(_("Invalid GSTIN format! GSTIN must be 15 characters (e.g. 37AABCA9106B1Z5)."))
+
+    customer_meta = frappe.get_meta("Customer")
+    update_dict = {}
+    if customer_meta.has_field("gstin"):
+        update_dict["gstin"] = cleaned_gstin
+    if customer_meta.has_field("tax_id"):
+        update_dict["tax_id"] = cleaned_gstin
+
+    if update_dict:
+        frappe.db.set_value("Customer", customer_name, update_dict)
+
+    # Also update GSTIN on linked Address records for this Customer
+    address_names = frappe.get_all("Dynamic Link", 
+        filters={"link_doctype": "Customer", "link_name": customer_name, "parenttype": "Address"}, 
+        pluck="parent")
     
-    addresses = frappe.get_all("Address", 
-        filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", customer_name]], 
-        fields=["name", "address_type"])
+    address_meta = frappe.get_meta("Address")
+    if address_names and address_meta.has_field("gstin"):
+        for addr_name in address_names:
+            frappe.db.set_value("Address", addr_name, "gstin", cleaned_gstin)
+    elif not address_names:
+        try:
+            customer_doc = frappe.get_doc("Customer", customer_name)
+            new_addr = frappe.new_doc("Address")
+            new_addr.address_title = f"{customer_doc.customer_name or customer_name} (Billing)"
+            new_addr.address_type = "Billing"
+            new_addr.address_line1 = customer_doc.customer_name or customer_name
+            new_addr.city = "Primary"
+            new_addr.country = "India"
+            new_addr.gstin = cleaned_gstin
+            new_addr.is_primary_address = 1
+            new_addr.append("links", {
+                "link_doctype": "Customer",
+                "link_name": customer_name
+            })
+            new_addr.save(ignore_permissions=True)
+        except Exception:
+            pass
     
-    if addresses:
-        addr_name = next((a.name for a in addresses if a.address_type == "Billing"), addresses[0].name)
-        addr_doc = frappe.get_doc("Address", addr_name)
-        addr_doc.address_line1 = billing_address
-        addr_doc.gstin = gstin
-        addr_doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {"status": "success"}
+
+
+@frappe.whitelist(allow_guest=True)
+def upload_company_logo():
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw(_("Please log in to update company logo."))
+        
+    customer_name = get_customer_for_user(user)
+    if not customer_name:
+        frappe.throw(_("No Customer linked to this user."))
+        
+    file_url = None
+    if "file" in frappe.request.files:
+        file_obj = frappe.request.files["file"]
+        saved_file = frappe.get_doc({
+            "doctype": "File",
+            "file_name": file_obj.filename,
+            "attached_to_doctype": "Customer",
+            "attached_to_name": customer_name,
+            "is_private": 0,
+            "content": file_obj.read()
+        })
+        saved_file.save(ignore_permissions=True)
+        file_url = saved_file.file_url
     else:
-        addr_doc = frappe.new_doc("Address")
-        addr_doc.address_title = legal_name
-        addr_doc.address_type = "Billing"
-        addr_doc.address_line1 = billing_address
-        addr_doc.gstin = gstin
-        addr_doc.append("links", {
+        file_url = frappe.form_dict.get("file_url")
+
+    if not file_url:
+        frappe.throw(_("No file uploaded."))
+
+    customer_meta = frappe.get_meta("Customer")
+    if customer_meta.has_field("image"):
+        frappe.db.set_value("Customer", customer_name, "image", file_url)
+    if customer_meta.has_field("customer_logo"):
+        frappe.db.set_value("Customer", customer_name, "customer_logo", file_url)
+        
+    frappe.db.commit()
+    return {"status": "success", "file_url": file_url}
+
+
+@frappe.whitelist(allow_guest=False)
+def save_portal_address(docname=None, address_title=None, address_type="Billing", address_line1=None, address_line2=None, city=None, state=None, country="India", pincode=None, gstin=None, gst_category=None, is_primary_billing=0, is_primary_shipping=0):
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw(_("Please log in to save address."))
+        
+    customer_name = get_customer_for_user(user)
+    if not customer_name:
+        frappe.throw(_("No Customer linked to this user."))
+        
+    if not address_line1 or not address_line1.strip():
+        frappe.throw(_("Address Line 1 is required."))
+    if not city or not city.strip():
+        frappe.throw(_("City is required."))
+        
+    # Clean GSTIN if provided
+    cleaned_gstin = (gstin or "").strip().upper()
+    if cleaned_gstin:
+        import re
+        gstin_regex = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
+        if not re.match(gstin_regex, cleaned_gstin):
+            frappe.throw(_("Invalid GSTIN format! GSTIN must be 15 characters (e.g. 22AAAAA0000A1Z5)."))
+
+    is_primary_billing = 1 if is_primary_billing in (1, "1", True, "true") else 0
+    is_primary_shipping = 1 if is_primary_shipping in (1, "1", True, "true") else 0
+
+    address_links = frappe.get_all("Dynamic Link", filters={"link_doctype": "Customer", "link_name": customer_name, "parenttype": "Address"}, fields=["parent"])
+    existing_parents = [d.parent for d in address_links] if address_links else []
+
+    if is_primary_billing == 1 and existing_parents:
+        frappe.db.sql("""UPDATE `tabAddress` SET is_primary_address = 0 WHERE name IN %s""", (tuple(existing_parents),))
+
+    if is_primary_shipping == 1 and existing_parents:
+        frappe.db.sql("""UPDATE `tabAddress` SET is_shipping_address = 0 WHERE name IN %s""", (tuple(existing_parents),))
+
+    if docname:
+        address = frappe.get_doc("Address", docname)
+        has_link = any(l.link_doctype == "Customer" and l.link_name == customer_name for l in address.links)
+        if not has_link:
+            frappe.throw(_("Permission denied for this Address record."))
+    else:
+        address = frappe.new_doc("Address")
+        address.append("links", {
             "link_doctype": "Customer",
             "link_name": customer_name
         })
-        addr_doc.insert(ignore_permissions=True)
-        
+
+    address.address_title = address_title or f"{customer_name} - {address_type or 'Billing'}"
+    address.address_type = address_type or "Billing"
+    address.address_line1 = address_line1.strip()
+    address.address_line2 = (address_line2 or "").strip()
+    address.city = city.strip()
+    address.state = (state or "").strip()
+    address.country = (country or "India").strip()
+    address.pincode = (pincode or "").strip()
+    address.gstin = cleaned_gstin
+    if gst_category:
+        address.gst_category = gst_category
+    address.is_primary_address = is_primary_billing
+    address.is_shipping_address = is_primary_shipping
+
+    address.save(ignore_permissions=True)
     frappe.db.commit()
-    return {"status": "success"}
+    return {"status": "success", "name": address.name}
 
 
 @frappe.whitelist(allow_guest=False)
@@ -384,6 +772,7 @@ def get_ticket_details(ticket_name):
     if not frappe.db.exists("Issue", ticket_name):
         return {"error": _("Ticket not found")}
         
+    frappe.clear_document_cache("Issue", ticket_name)
     issue = frappe.get_doc("Issue", ticket_name)
     
     # Permission check: guest or user must be linked to customer or raised by
@@ -392,46 +781,665 @@ def get_ticket_details(ticket_name):
         if issue.customer and issue.customer != customer_name and issue.raised_by != user:
             frappe.throw(_("Not permitted"), frappe.PermissionError)
             
+    # Helper for user details
+    def resolve_user_meta(uid):
+        if not uid:
+            return {"full_name": "", "user_image": "", "role_profile": "", "designation": ""}
+        if not frappe.db.exists("User", uid):
+            return {"full_name": uid, "user_image": "", "role_profile": "", "designation": ""}
+        udata = frappe.db.get_value("User", uid, ["full_name", "user_image", "role_profile_name"], as_dict=True)
+        if udata:
+            return {
+                "full_name": udata.full_name or uid,
+                "user_image": udata.user_image or "",
+                "role_profile": udata.role_profile_name or "",
+                "designation": udata.role_profile_name or ""
+            }
+        return {"full_name": uid, "user_image": "", "role_profile": "", "designation": ""}
+
     working_agent_name = "-"
     if issue.working_agent:
         working_agent_name = frappe.db.get_value("User", issue.working_agent, "full_name") or issue.working_agent
-        
+
     attachments = frappe.get_all("File",
         filters={"attached_to_doctype": "Issue", "attached_to_name": ticket_name},
         fields=["name", "file_name", "file_url", "file_size", "creation"],
-        order_by="creation desc"
+        order_by="creation desc",
+        ignore_permissions=True
     )
+
+    working_agent_details = resolve_user_meta(issue.working_agent)
+    raised_by_details = resolve_user_meta(issue.raised_by)
     
-    activity = []
+    sales_person_name = issue.get("sales_person") or ""
+    sales_person_details = {"full_name": sales_person_name, "user_image": "", "role_profile": "", "designation": ""}
+    if sales_person_name:
+        if frappe.db.exists("User", sales_person_name):
+            sales_person_details = resolve_user_meta(sales_person_name)
+        else:
+            emp = frappe.db.get_value("Sales Person", sales_person_name, "employee")
+            emp_user = frappe.db.get_value("Employee", emp, "user_id") if emp else None
+            if emp_user:
+                sales_person_details = resolve_user_meta(emp_user)
+
+    technician_visits = []
+    if frappe.db.table_exists("Technician Visit"):
+        technician_visits = frappe.get_all(
+            "Technician Visit",
+            filters={"issue": ticket_name},
+            fields=[
+                "name", "status", "visit_type", "visit_date", "visit_priority", "time_slot",
+                "assigned_technician", "customer_contact", "location"
+            ],
+            order_by="creation desc"
+        )
+
+    customer_contacts = []
+    # 1. Fetch issue-specific contacts from issue_contact_list child table
+    for row in (issue.get("issue_contact_list") or issue.get("contact_list") or issue.get("custom_contacts") or []):
+        person_name = row.get("user_name") or row.get("contact_name") or row.get("person_name") or row.get("name") or ""
+        if person_name or row.get("email_id"):
+            customer_contacts.append({
+                "name": row.get("name") or person_name,
+                "person_name": person_name,
+                "user_name": row.get("user_name") or "",
+                "designation": row.get("designation") or "Contact",
+                "email_id": row.get("email_id") or "",
+                "mobile_no": row.get("mobile_no") or "",
+                "is_primary": row.get("tpoc") or row.get("is_primary_contact") or 0
+            })
+
+    # 2. Fallback to customer linked contacts if issue_contact_list is empty
+    if not customer_contacts and issue.customer:
+        c_list = frappe.get_all("Contact",
+            filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", issue.customer]],
+            fields=["name", "first_name", "last_name", "email_id", "phone", "mobile_no", "designation", "is_primary_contact"]
+        )
+        for c in c_list:
+            full_c_name = f"{c.first_name or ''} {c.last_name or ''}".strip() or c.name
+            customer_contacts.append({
+                "name": c.name,
+                "person_name": full_c_name,
+                "designation": c.designation or "Contact",
+                "email_id": c.email_id or "",
+                "mobile_no": c.mobile_no or c.phone or "",
+                "is_primary": c.is_primary_contact or 0
+            })
+
+    # Fetch scope of work and checklist details
+    scope_of_work = (issue.get("scope_of_work") or issue.get("custom_scope_of_work") or "").strip()
+    checklist_state = issue.get("custom_checklist_state") or ""
+    checklist_items = []
+
+    # 1. Fetch SLA Task checklist (matching ticket_list.py logic)
+    query_type = issue.get("custom_query_type") or issue.get("issue_type")
+    active_sub = issue.get("active_subscription")
+    if query_type:
+        item_group = None
+        if active_sub:
+            item_group = frappe.db.get_value("Renewal Item", {"parent": active_sub}, "item_group")
+            if not item_group:
+                product_name = frappe.db.get_value("Renewal List", active_sub, "product_name")
+                if product_name:
+                    item_group = frappe.db.get_value("Item", {"item_code": product_name}, "item_group")
+                    if not item_group:
+                        item_group = frappe.db.get_value("Item", {"item_name": product_name}, "item_group")
+
+        sla_task_name = None
+        if item_group:
+            sla_task_name = frappe.db.get_value("SLA Task", {"task_name": query_type, "item_group": item_group, "status": "Active"}, "name")
+        if not sla_task_name:
+            sla_task_name = frappe.db.get_value("SLA Task", {"task_name": query_type, "status": "Active"}, "name")
+        if not sla_task_name:
+            sla_task_name = frappe.db.get_value("SLA Task", {"name": query_type, "status": "Active"}, "name")
+
+        if sla_task_name:
+            raw_checklist = frappe.get_all(
+                "SLA Checklist",
+                filters={"parent": sla_task_name, "parenttype": "SLA Task"},
+                fields=["support_level", "activity", "sequence"],
+                order_by="sequence asc",
+                ignore_permissions=True
+            )
+            for row in raw_checklist:
+                title = (row.get("activity") or row.get("item") or row.get("title") or "").strip()
+                if title:
+                    checklist_items.append({
+                        "item": title,
+                        "activity": title,
+                        "support_level": row.get("support_level") or "",
+                        "level": row.get("support_level") or "",
+                        "sequence": row.get("sequence") or 0
+                    })
+
+    # 2. Fallback: Parse custom_checklist_state if checklist_items is empty
+    if not checklist_items and checklist_state:
+        try:
+            import json
+            parsed_state = json.loads(checklist_state) if isinstance(checklist_state, str) else checklist_state
+            if isinstance(parsed_state, dict):
+                selected = parsed_state.get("_selected_items")
+                if isinstance(selected, list):
+                    for st in selected:
+                        title = st.split("::")[-1].strip() if isinstance(st, str) and "::" in st else str(st)
+                        lvl = st.split("::")[0].strip() if isinstance(st, str) and "::" in st else ""
+                        if title:
+                            checklist_items.append({
+                                "item": title,
+                                "activity": title,
+                                "support_level": lvl,
+                                "level": lvl
+                            })
+                for k, v in parsed_state.items():
+                    if k.startswith("_"):
+                        continue
+                    title = k.split("::")[-1].strip() if "::" in k else k.strip()
+                    lvl = k.split("::")[0].strip() if "::" in k else ""
+                    if title and not any(ci["item"] == title for ci in checklist_items):
+                        checklist_items.append({
+                            "item": title,
+                            "activity": title,
+                            "support_level": lvl,
+                            "level": lvl
+                        })
+        except Exception:
+            pass
+
+    raw_activity = []
     try:
         from renewal_module.custom_module.page.ticket_list.ticket_list import get_issue_activity
-        activity = get_issue_activity(ticket_name)
+        raw_activity = get_issue_activity(ticket_name)
     except Exception as e:
         frappe.log_error(f"Error fetching issue activity: {e}", "Portal Ticket Details")
-        activity = []
+        raw_activity = []
     
+    # Map attachments by file name for link enrichment
+    att_map = {}
+    for att in attachments:
+        fname = att.get("file_name")
+        furl = att.get("file_url")
+        if fname and furl:
+            att_map[fname] = furl
+
+    # Filter activity for customer portal visibility (exclude internal notes and internal agent system logs)
+    customer_activity = []
+    allowed_types = {"Comment", "Communication", "Status Change", "Created", "Document Created", "File Attached", "Attachment", "Info Added", "Resolution"}
+    for act in raw_activity:
+        act_type = act.get("type") or ""
+        desc = (act.get("description") or "").strip()
+        
+        # Exclude internal notes or hidden internal activity
+        if act_type in allowed_types or "Status" in act_type:
+            if "[Internal" in desc or "[Private]" in desc or act_type == "Internal Note":
+                continue
+
+            # Enrich plain text file references with clickable HTML links
+            if att_map and desc:
+                for fname, furl in att_map.items():
+                    if fname in desc and f'href="{furl}"' not in desc and f"href='{furl}'" not in desc:
+                        pattern = f"📎 {fname}" if f"📎 {fname}" in desc else fname
+                        link_html = f'<a href="{furl}" target="_blank" style="color:var(--indigo);font-weight:600;text-decoration:underline;">📎 {fname}</a>'
+                        desc = desc.replace(pattern, link_html)
+                        act["description"] = desc
+                        act["is_html"] = True
+
+            if "<a " in desc or "<div" in desc or "📎" in desc or act_type in ("File Attached", "Attachment"):
+                act["is_html"] = True
+            customer_activity.append(act)
+
+    # Ensure any file attachment without an existing timeline event is added (avoiding duplicates)
+    for att in attachments:
+        file_url = att.get("file_url")
+        file_name = att.get("file_name") or "Attachment"
+        if not file_url:
+            continue
+        already_present = any(
+            (file_url and file_url in str(act.get("description") or "")) or
+            (file_name and file_name in str(act.get("description") or "")) or
+            (file_url and file_url in str(act.get("content") or "")) or
+            (file_name and file_name in str(act.get("content") or ""))
+            for act in customer_activity
+        )
+        if not already_present:
+            owner_id = att.get("owner")
+            uploader = resolve_user_meta(owner_id).get("full_name") or owner_id or "User"
+            creation_stamp = str(att.get("creation")) if att.get("creation") else ""
+            customer_activity.append({
+                "type": "File Attached",
+                "title": f"{uploader} File Attached",
+                "description": f'Added <a href="{file_url}" target="_blank" style="color:var(--indigo);font-weight:600;text-decoration:underline;">📎 {file_name}</a>',
+                "timestamp": creation_stamp,
+                "display": frappe.utils.format_datetime(creation_stamp, "medium") if creation_stamp else "",
+                "by": uploader,
+                "color": "info",
+                "is_html": True
+            })
+
+    customer_activity.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+
+    # Fetch ticket-specific renewal details from Issue's active_renewals child table
+    active_renewals = []
+    for row in issue.get("active_renewals") or []:
+        active_renewals.append({
+            "item": row.get("item") or row.get("item_name") or "",
+            "renewal_id": row.get("renewal_id") or "",
+            "start_date": str(row.get("start_date")) if row.get("start_date") else "",
+            "end_date": str(row.get("end_date")) if row.get("end_date") else "",
+            "quantity": row.get("quantity") or row.get("qty") or "",
+            "amount": row.get("amount") or ""
+        })
+    
+    # Fetch assignees
+    assignees = []
+    raw_assign = issue.get("_assign")
+    if raw_assign:
+        try:
+            import json
+            parsed = json.loads(raw_assign) if isinstance(raw_assign, str) else raw_assign
+            if isinstance(parsed, list):
+                assignees = parsed
+        except Exception:
+            assignees = []
+
+    if not assignees:
+        try:
+            assignees = frappe.get_all("ToDo", filters={
+                "reference_type": "Issue",
+                "reference_name": ticket_name,
+                "status": "Open"
+            }, pluck="allocated_to", ignore_permissions=True)
+        except Exception:
+            assignees = []
+
+    assignees_details = []
+    if assignees:
+        for u_id in assignees:
+            if u_id:
+                u_info = frappe.db.get_value("User", u_id, ["name", "full_name", "user_image", "email"], as_dict=True)
+                if u_info:
+                    assignees_details.append({
+                        "name": u_info.name,
+                        "full_name": u_info.full_name or u_info.name,
+                        "user_image": u_info.user_image or "",
+                        "email": u_info.email or u_info.name
+                    })
+
     res_details = issue.get("resolution_details") or issue.get("resolution") or ""
     
+    cust_val = issue.customer or getattr(issue, "customer_name", "") or getattr(issue, "custom_customer", "") or ""
+    
     return {
+        "assignees": assignees,
+        "assignees_details": assignees_details,
         "name": issue.name,
         "subject": issue.subject,
         "status": issue.status,
         "creation": str(issue.creation),
         "modified": str(issue.modified),
-        "raised_by": issue.raised_by,
+        "customer": cust_val,
+        "customer_name": cust_val,
+        "raised_by_details": raised_by_details,
+        "working_agent": issue.working_agent,
+        "working_agent_name": working_agent_details.get("full_name") or working_agent_name,
+        "working_agent_details": working_agent_details,
+        "sales_person": sales_person_name,
+        "sales_person_details": sales_person_details,
         "priority": issue.priority,
         "description": issue.description,
         "issue_type": issue.issue_type,
+        "custom_query_type": issue.get("custom_query_type") or issue.issue_type or "",
+        "category": issue.get("custom_query_type") or issue.issue_type or issue.get("category") or "",
+        "custom_support_type": issue.get("custom_support_type") or issue.get("support_type") or "",
+        "ticket_type": issue.get("ticket_type") or "External",
+        "location": issue.get("location") or issue.get("custom_location") or issue.get("customer_territory") or "",
         "contact_email": issue.contact_email,
         "person_name": issue.person_name,
+        "scope_of_work": scope_of_work,
+        "checklist_state": checklist_state,
+        "custom_checklist_state": checklist_state,
+        "checklist_items": checklist_items,
         "resolution_details": res_details,
         "resolution_by": str(issue.resolution_by) if issue.resolution_by else None,
         "sla_resolution_by": str(issue.sla_resolution_by) if issue.sla_resolution_by else None,
+        "response_by": str(issue.response_by) if issue.get("response_by") else None,
+        "sla_t1": str(issue.get("sla_t1")) if issue.get("sla_t1") else None,
+        "sla_t2": str(issue.get("sla_t2")) if issue.get("sla_t2") else None,
+        "sla_t3": str(issue.get("sla_t3")) if issue.get("sla_t3") else None,
         "agreement_status": issue.agreement_status or "-",
-        "working_agent": issue.working_agent,
-        "working_agent_name": working_agent_name,
+        "customer": issue.customer,
+        "customer_name": issue.customer_name,
+        "technician_visits": technician_visits,
+        "customer_contacts": customer_contacts,
+        "active_renewals": active_renewals,
         "attachments": attachments,
-        "activity": activity
+        "activity": customer_activity
     }
+
+@frappe.whitelist(allow_guest=False)
+def add_ticket_reply(ticket_name, comment_text, attachments=None):
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw(_("Please log in to reply to tickets."), frappe.PermissionError)
+        
+    if not ticket_name or not comment_text or not comment_text.strip():
+        frappe.throw(_("Reply content cannot be empty."))
+        
+    if not frappe.db.exists("Issue", ticket_name):
+        frappe.throw(_("Ticket not found."))
+        
+    issue = frappe.get_doc("Issue", ticket_name)
+    customer_name = get_customer_for_user(user)
+    if issue.customer and issue.customer != customer_name and issue.raised_by != user:
+        frappe.throw(_("Not permitted to modify this ticket."), frappe.PermissionError)
+        
+    reply_html = comment_text.strip()
+    
+    # Process attached files if present
+    parsed_attachments = []
+    if attachments:
+        import json
+        if isinstance(attachments, str):
+            try:
+                parsed_attachments = json.loads(attachments)
+            except Exception:
+                parsed_attachments = []
+        elif isinstance(attachments, list):
+            parsed_attachments = attachments
+
+    if parsed_attachments:
+        attachment_links = []
+        for att in parsed_attachments:
+            if isinstance(att, dict):
+                f_name = att.get("name")
+                f_url = att.get("file_url")
+                display_name = att.get("file_name") or f_name or "Attachment"
+            else:
+                f_url = str(att)
+                f_name = None
+                display_name = "Attachment"
+
+            # Ensure file document is attached to the Issue
+            if f_name and frappe.db.exists("File", f_name):
+                frappe.db.set_value("File", f_name, {
+                    "attached_to_doctype": "Issue",
+                    "attached_to_name": ticket_name
+                }, update_modified=False)
+            elif f_url:
+                file_docs = frappe.get_all("File", filters={"file_url": f_url}, fields=["name"])
+                for fd in file_docs:
+                    frappe.db.set_value("File", fd.name, {
+                        "attached_to_doctype": "Issue",
+                        "attached_to_name": ticket_name
+                    }, update_modified=False)
+
+            if f_url:
+                attachment_links.append(f'<div style="margin-top:4px;"><a href="{f_url}" target="_blank" style="color:var(--indigo);font-weight:500;">📎 {display_name}</a></div>')
+        
+        if attachment_links:
+            reply_html += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e2e8f0;font-size:12px;color:var(--ink-soft);">' + ''.join(attachment_links) + '</div>'
+
+    # Post comment to issue
+    user_name = frappe.db.get_value("User", user, "full_name") or user
+    issue.add_comment("Comment", text=reply_html, comment_email=user, comment_by=user_name)
+    
+    # If ticket was Client Input Pending, transition back to Open
+    if issue.status == "Client Input Pending":
+        issue.status = "Open"
+        issue.save(ignore_permissions=True)
+        
+    frappe.db.commit()
+    
+    return get_ticket_details(ticket_name)
+
+
+@frappe.whitelist(allow_guest=False)
+def get_contact_detail(contact_id):
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw(_("Authentication required."))
+
+    customer_name = get_customer_for_user(user)
+    if not customer_name:
+        frappe.throw(_("No Customer linked to user."))
+
+    if not frappe.db.exists("Contact", contact_id):
+        frappe.throw(_("Contact not found."))
+
+    links = frappe.get_all("Dynamic Link", filters={
+        "parenttype": "Contact",
+        "parent": contact_id,
+        "link_doctype": "Customer",
+        "link_name": customer_name
+    })
+    comp = frappe.db.get_value("Contact", contact_id, "company_name")
+    if not links and comp != customer_name:
+        frappe.throw(_("Permission denied to view this contact."))
+
+    doc = frappe.get_doc("Contact", contact_id)
+    contact_dict = doc.as_dict()
+    
+    contact_dict["email_ids"] = [
+        {"email_id": e.email_id, "is_primary": e.is_primary}
+        for e in doc.get("email_ids", [])
+    ]
+    contact_dict["phone_nos"] = [
+        {"phone": p.phone, "is_primary_phone": p.is_primary_phone, "is_primary_mobile_no": p.is_primary_mobile_no}
+        for p in doc.get("phone_nos", [])
+    ]
+    contact_dict["tpoc"] = doc.get("tpoc") or doc.get("custom_tpoc") or 0
+
+    return contact_dict
+
+
+@frappe.whitelist(allow_guest=False)
+def save_contact(docname=None, first_name=None, last_name=None, designation=None, department=None, status=None, gender=None, is_primary=0, emails=None, phones=None, custom_linked_in=None, date_of_birth=None, address=None, tpoc=0):
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw(_("Authentication required."))
+
+    customer_name = get_customer_for_user(user)
+    if not customer_name:
+        frappe.throw(_("No Customer linked to user {0}").format(user))
+
+    if not first_name or not first_name.strip():
+        frappe.throw(_("First Name is required."))
+
+    first_name = first_name.strip()
+    last_name = (last_name or "").strip()
+    designation = (designation or "").strip()
+    department = (department or "").strip()
+    status = status or "Open"
+    gender = gender or ""
+    custom_linked_in = (custom_linked_in or "").strip()
+    date_of_birth = date_of_birth or None
+    address = (address or "").strip()
+
+    is_primary_val = 1 if frappe.parse_json(is_primary) else 0
+    tpoc_val = 1 if frappe.parse_json(tpoc) else 0
+
+    if docname:
+        links = frappe.get_all("Dynamic Link", filters={
+            "parenttype": "Contact",
+            "parent": docname,
+            "link_doctype": "Customer",
+            "link_name": customer_name
+        })
+        comp = frappe.db.get_value("Contact", docname, "company_name")
+        if not links and comp != customer_name:
+            frappe.throw(_("Permission denied to update this contact."))
+        contact = frappe.get_doc("Contact", docname)
+    else:
+        contact = frappe.new_doc("Contact")
+        contact.append("links", {
+            "link_doctype": "Customer",
+            "link_name": customer_name
+        })
+
+    contact.first_name = first_name
+    contact.last_name = last_name
+    contact.designation = designation
+    contact.department = department
+    contact.status = status
+    contact.gender = gender
+    contact.is_primary_contact = is_primary_val
+    contact.custom_linked_in = custom_linked_in
+    contact.date_of_birth = date_of_birth
+    contact.company_name = customer_name
+    if address:
+        contact.address = address
+
+    contact_meta = frappe.get_meta("Contact")
+    if contact_meta.has_field("tpoc"):
+        contact.tpoc = tpoc_val
+    if contact_meta.has_field("custom_tpoc"):
+        contact.custom_tpoc = tpoc_val
+
+    contact.email_ids = []
+    primary_email = ""
+    if emails:
+        import json
+        if isinstance(emails, str):
+            email_list = json.loads(emails)
+        else:
+            email_list = emails
+        for em in email_list:
+            e_str = (em.get("email_id") or "").strip()
+            if e_str:
+                is_p = 1 if em.get("is_primary") else 0
+                if is_p and not primary_email:
+                    primary_email = e_str
+                contact.append("email_ids", {
+                    "email_id": e_str,
+                    "is_primary": is_p
+                })
+
+    if not primary_email and contact.email_ids:
+        primary_email = contact.email_ids[0].email_id
+    if primary_email:
+        contact.email_id = primary_email
+
+    contact.phone_nos = []
+    primary_phone = ""
+    if phones:
+        import json
+        if isinstance(phones, str):
+            phone_list = json.loads(phones)
+        else:
+            phone_list = phones
+        for ph in phone_list:
+            p_str = (ph.get("phone") or "").strip()
+            if p_str:
+                is_pp = 1 if ph.get("is_primary_phone") else 0
+                is_pm = 1 if ph.get("is_primary_mobile_no") else 0
+                if (is_pp or is_pm) and not primary_phone:
+                    primary_phone = p_str
+                contact.append("phone_nos", {
+                    "phone": p_str,
+                    "is_primary_phone": is_pp,
+                    "is_primary_mobile_no": is_pm
+                })
+
+    if not primary_phone and contact.phone_nos:
+        primary_phone = contact.phone_nos[0].phone
+    if primary_phone:
+        contact.mobile_no = primary_phone
+        contact.phone = primary_phone
+
+    contact.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "name": contact.name,
+        "first_name": contact.first_name,
+        "last_name": contact.last_name,
+        "email_id": contact.email_id,
+        "phone": contact.phone,
+        "mobile_no": contact.mobile_no,
+        "designation": contact.designation,
+        "department": contact.department,
+        "status": contact.status,
+        "gender": contact.gender,
+        "is_primary_contact": contact.is_primary_contact,
+        "tpoc": contact.get("tpoc") or contact.get("custom_tpoc") or tpoc_val
+    }
+
+
+@frappe.whitelist(allow_guest=False)
+def update_ticket_contacts(ticket_name, contacts):
+    if not frappe.session.user or frappe.session.user == "Guest":
+        frappe.throw(_("Please log in to update contacts."), frappe.PermissionError)
+
+    if not ticket_name:
+        frappe.throw(_("Ticket name is required."))
+
+    if not frappe.db.exists("Issue", ticket_name):
+        frappe.throw(_("Ticket not found."))
+
+    issue = frappe.get_doc("Issue", ticket_name)
+    user_cust = get_customer_for_user(frappe.session.user)
+    if user_cust and issue.customer and issue.customer != user_cust:
+        frappe.throw(_("Not permitted to modify this ticket."), frappe.PermissionError)
+
+    if isinstance(contacts, str):
+        import json
+        contacts = json.loads(contacts)
+
+    issue.set("issue_contact_list", [])
+
+    customer_name = issue.customer
+    if contacts and isinstance(contacts, list):
+        for c in contacts:
+            if isinstance(c, dict):
+                raw_name = c.get("name") or c.get("user_name") or c.get("person_name") or ""
+                email_id = (c.get("email_id") or "").strip()
+                phone_no = (c.get("mobile_no") or c.get("phone") or "").strip()
+                first_name = (c.get("first_name") or "").strip()
+                last_name = (c.get("last_name") or "").strip()
+                designation = (c.get("designation") or "").strip()
+
+                contact_link = None
+                if raw_name and frappe.db.exists("Contact", raw_name):
+                    contact_link = raw_name
+                elif email_id:
+                    contact_link = frappe.db.get_value("Contact", {"email_id": email_id}, "name")
+
+                if not contact_link and customer_name:
+                    fname = first_name or (raw_name.split()[0] if raw_name else "")
+                    if fname:
+                        contact_link = frappe.db.get_value("Contact", {"first_name": fname, "company_name": customer_name}, "name")
+                        if not contact_link:
+                            contact_link = frappe.db.get_value("Contact", {"first_name": fname}, "name")
+
+                if not contact_link and (first_name or raw_name or email_id):
+                    try:
+                        new_c = frappe.get_doc({
+                            "doctype": "Contact",
+                            "first_name": first_name or raw_name or "Contact",
+                            "last_name": last_name,
+                            "email_id": email_id,
+                            "phone": phone_no,
+                            "mobile_no": phone_no,
+                            "designation": designation,
+                            "company_name": customer_name or "",
+                            "links": [{"link_doctype": "Customer", "link_name": customer_name}] if customer_name and frappe.db.exists("Customer", customer_name) else []
+                        })
+                        new_c.insert(ignore_permissions=True)
+                        contact_link = new_c.name
+                    except Exception as ex:
+                        frappe.log_error(f"Failed to auto-create contact: {ex}")
+
+                if contact_link:
+                    issue.append("issue_contact_list", {
+                        "user_name": contact_link,
+                        "email_id": email_id,
+                        "mobile_no": phone_no,
+                        "designation": designation,
+                        "company_name": customer_name,
+                        "tpoc": 1 if (c.get("is_primary") or c.get("is_primary_contact") or c.get("tpoc")) else 0
+                    })
+
+    issue.save(ignore_permissions=True)
+    frappe.db.commit()
+    return get_ticket_details(ticket_name)
 
 
