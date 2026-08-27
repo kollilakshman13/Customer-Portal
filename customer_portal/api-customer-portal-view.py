@@ -32,7 +32,7 @@ def get_website_user_home_page(user):
         return None
     roles = frappe.get_roles(user)
     if "Customer" in roles and "System Manager" not in roles and "Administrator" not in roles:
-        return "customer-portal"
+        return "customer-portal-view"
     return None
 
 @frappe.whitelist(allow_guest=True)
@@ -47,8 +47,7 @@ def get_portal_data():
                 "name": "",
                 "customer_name": "Guest",
                 "gstin": "",
-                "billing_address": "",
-                "shipping_address": ""
+                "billing_address": ""
             },
             "stats": {
                 "active_licenses": 0,
@@ -105,19 +104,13 @@ def get_portal_data():
         shipping_address = billing_address
         shipping_gstin = gstin
         
-    # Fetch Contacts with TPOC & Image fields
+    # Fetch Contacts with TPOC fields
     contact_fields = ["name", "first_name", "last_name", "email_id", "phone", "mobile_no", "is_primary_contact", "designation"]
     contact_meta = frappe.get_meta("Contact")
     if contact_meta.has_field("tpoc"):
         contact_fields.append("tpoc")
     if contact_meta.has_field("custom_tpoc"):
         contact_fields.append("custom_tpoc")
-    if contact_meta.has_field("image"):
-        contact_fields.append("image")
-    if contact_meta.has_field("custom_image"):
-        contact_fields.append("custom_image")
-    if contact_meta.has_field("user_image"):
-        contact_fields.append("user_image")
 
     contacts = frappe.get_all("Contact", 
         filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", customer_name]], 
@@ -126,10 +119,6 @@ def get_portal_data():
     for c in contacts:
         if c.get("custom_tpoc") and not c.get("tpoc"):
             c["tpoc"] = c["custom_tpoc"]
-        if not c.get("image") and c.get("email_id"):
-            u_img = frappe.db.get_value("User", c["email_id"], "user_image")
-            if u_img:
-                c["image"] = u_img
         
     # Fetch Invoices (Sales Invoice)
     invoices = frappe.get_all("Sales Invoice", 
@@ -187,7 +176,7 @@ def get_portal_data():
     issues = frappe.get_all("Issue", 
         filters={"customer": customer_name}, 
         fields=[
-            "name", "subject", "status", "creation", "modified", "raised_by", "sales_person",
+            "name", "subject", "status", "creation", "modified", "raised_by", 
             "priority", "description", "issue_type", "custom_query_type", "custom_support_type", "contact_email",
             "resolution_details", "resolution_by", "sla_resolution_by", "agreement_status",
             "working_agent", "response_by"
@@ -284,39 +273,6 @@ def get_portal_data():
             r["brand_logo"] = ren_brand_logo or ""
             r["item_group"] = ren_item_group or r.get("item_group") or r.get("category") or "General"
         
-    # Fetch Opportunities
-    opportunities = []
-    try:
-        if frappe.db.exists("DocType", "Opportunity"):
-            opportunities = frappe.get_all("Opportunity",
-                filters=[["party_name", "=", customer_name]],
-                fields=["name", "title", "opportunity_from", "party_name", "status", "opportunity_amount", "creation"],
-                order_by="creation desc", limit=10)
-    except Exception as e:
-        frappe.log_error(f"Error fetching Opportunities: {e}", "Portal API")
-
-    # Fetch Quotations
-    quotations = []
-    try:
-        if frappe.db.exists("DocType", "Quotation"):
-            quotations = frappe.get_all("Quotation",
-                filters=[["party_name", "=", customer_name]],
-                fields=["name", "transaction_date", "valid_till", "grand_total", "status", "creation"],
-                order_by="creation desc", limit=10)
-    except Exception as e:
-        frappe.log_error(f"Error fetching Quotations: {e}", "Portal API")
-
-    # Fetch Communications / Call Logs
-    communications = []
-    try:
-        if frappe.db.exists("DocType", "Communication"):
-            communications = frappe.get_all("Communication",
-                filters=[["timeline_doctype", "=", "Customer"], ["timeline_name", "=", customer_name]],
-                fields=["name", "subject", "communication_type", "communication_medium", "content", "creation", "sender_full_name"],
-                order_by="creation desc", limit=10)
-    except Exception as e:
-        frappe.log_error(f"Error fetching Communications: {e}", "Portal API")
-
     # Compute metrics/stats
     active_licenses = sum(1 for r in renewals if r.status == "Active")
     
@@ -362,94 +318,16 @@ def get_portal_data():
     if not gst_category_options:
         gst_category_options = ["Registered Regular", "Registered Composition", "Unregistered", "SEZ", "Overseas", "Deemed Export", "UIN Holders", "Tax Deductor"]
 
-    # Dynamic Security Health Score calculation based strictly on live customer database records
-    lic_comp = min(100, int((active_licenses / len(renewals)) * 100)) if renewals else 100
-    inv_comp = min(100, int(((len(invoices) - open_invoices_count) / len(invoices)) * 100)) if invoices else 100
-    tkt_comp = min(100, int(((len(issues) - open_tickets) / len(issues)) * 100)) if issues else 100
-    av_comp = int(customer_doc.get("av_coverage") or customer_doc.get("custom_av_coverage") or 0)
-
-    overall_health = int((lic_comp * 0.35) + (inv_comp * 0.25) + (tkt_comp * 0.20) + (av_comp * 0.20))
-    health_label = "Excellent" if overall_health >= 85 else ("Good" if overall_health >= 70 else "Needs Attention")
-
-    security_health = {
-        "score": overall_health,
-        "label": health_label,
-        "factors": [
-            {"name": "AV Coverage", "score": av_comp},
-            {"name": "Licence Compliance", "score": lic_comp},
-            {"name": "Patch & Billing Compliance", "score": inv_comp},
-            {"name": "Support Resolution SLA", "score": tkt_comp}
-        ]
-    }
-
-    def resolve_person_meta(pname):
-        if not pname:
-            return {"name": "", "image": "", "email": ""}
-        pname_str = str(pname).strip()
-        img = ""
-        email = pname_str if "@" in pname_str else ""
-        full_name = pname_str
-
-        if frappe.db.exists("User", pname_str):
-            u_doc = frappe.db.get_value("User", pname_str, ["full_name", "user_image", "email"], as_dict=True)
-            if u_doc:
-                full_name = u_doc.full_name or pname_str
-                img = u_doc.user_image or ""
-                email = u_doc.email or email
-        elif frappe.db.exists("Sales Person", pname_str):
-            sp_doc = frappe.get_doc("Sales Person", pname_str)
-            if hasattr(sp_doc, "email_id") and sp_doc.get("email_id"):
-                email = sp_doc.get("email_id")
-            emp = sp_doc.get("employee")
-            if emp and frappe.db.exists("Employee", emp):
-                e_doc = frappe.db.get_value("Employee", emp, ["employee_name", "image", "user_id", "company_email", "personal_email"], as_dict=True)
-                if e_doc:
-                    full_name = e_doc.employee_name or pname_str
-                    img = e_doc.image or (frappe.db.get_value("User", e_doc.user_id, "user_image") if e_doc.user_id else "")
-                    email = e_doc.company_email or e_doc.personal_email or e_doc.user_id or email
-        elif frappe.db.exists("Employee", pname_str):
-            e_doc = frappe.db.get_value("Employee", pname_str, ["employee_name", "image", "user_id", "company_email", "personal_email"], as_dict=True)
-            if e_doc:
-                full_name = e_doc.employee_name or pname_str
-                img = e_doc.image or (frappe.db.get_value("User", e_doc.user_id, "user_image") if e_doc.user_id else "")
-                email = e_doc.company_email or e_doc.personal_email or e_doc.user_id or email
-        elif frappe.db.exists("Contact", pname_str):
-            c_doc = frappe.db.get_value("Contact", pname_str, ["first_name", "last_name", "email_id", "image", "user_image"], as_dict=True)
-            if c_doc:
-                full_name = f"{c_doc.first_name or ''} {c_doc.last_name or ''}".strip() or pname_str
-                img = c_doc.image or c_doc.user_image or ""
-                email = c_doc.email_id or email
-
-        return {"name": full_name, "image": img or "", "email": email or ""}
-
-    sp_raw = customer_doc.get("account_manager") or customer_doc.get("sales_person") or ""
-    tl_raw = customer_doc.get("technical_lead") or ""
-    bc_raw = customer_doc.get("billing_contact") or ""
-
-    sp_meta = resolve_person_meta(sp_raw)
-    tl_meta = resolve_person_meta(tl_raw)
-    bc_meta = resolve_person_meta(bc_raw)
-
     return {
         "customer_info": {
             "name": customer_doc.name,
             "customer_name": customer_doc.customer_name,
-            "user_fullname": frappe.db.get_value("User", user, "full_name") or customer_doc.customer_name or user,
-            "user_email": user,
             "image": customer_doc.get("image") or customer_doc.get("customer_logo") or "",
             "gstin": gstin,
             "shipping_gstin": shipping_gstin,
             "billing_address": billing_address,
             "shipping_address": shipping_address,
-            "sales_person": sp_meta["name"] or sp_raw,
-            "sales_person_image": sp_meta["image"],
-            "sales_person_email": sp_meta["email"],
-            "technical_lead": tl_meta["name"] or tl_raw,
-            "technical_lead_image": tl_meta["image"],
-            "technical_lead_email": tl_meta["email"],
-            "billing_contact": bc_meta["name"] or bc_raw,
-            "billing_contact_image": bc_meta["image"],
-            "billing_contact_email": bc_meta["email"]
+            "sales_person": customer_doc.get("account_manager") or customer_doc.get("sales_person") or ""
         },
         "stats": {
             "active_licenses": active_licenses,
@@ -458,13 +336,9 @@ def get_portal_data():
             "open_tickets": open_tickets,
             "next_renewal_days": next_renewal_days
         },
-        "security_health": security_health,
         "renewals": renewals,
         "invoices": invoices,
         "orders": orders,
-        "opportunities": opportunities,
-        "quotations": quotations,
-        "communications": communications,
         "support": {
             "tickets": issues,
             "priorities": priorities,
@@ -536,7 +410,7 @@ def upload_portal_attachment():
         frappe.log_error(f"Error saving uploaded attachment: {ex}")
         return {"status": "error", "message": str(ex)}
 
-@frappe.whitelist(allow_guest=False)
+@frappe.whitelist(allow_guest=True)
 def create_support_ticket(
     subject,
     description,
@@ -544,7 +418,6 @@ def create_support_ticket(
     category=None,
     department=None,
     active_subscription=None,
-    active_renewals=None,
     contact_email=None,
     contact_person=None,
     contacts=None,
@@ -613,29 +486,6 @@ def create_support_ticket(
     if active_subscription:
         issue.active_subscription = active_subscription
 
-    # Append active_renewals if passed
-    renewals_list = []
-    if active_renewals:
-        if isinstance(active_renewals, str):
-            try:
-                renewals_list = json.loads(active_renewals)
-            except Exception:
-                renewals_list = []
-        elif isinstance(active_renewals, list):
-            renewals_list = active_renewals
-
-    if renewals_list:
-        for r in renewals_list:
-            if isinstance(r, dict):
-                issue.append("active_renewals", {
-                    "item": r.get("item"),
-                    "start_date": r.get("start_date"),
-                    "end_date": r.get("end_date"),
-                    "quantity": r.get("quantity"),
-                    "amount": r.get("amount"),
-                    "renewal_id": r.get("renewal_id")
-                })
-
     # Append multiple contacts into issue_contact_list child table with resolved Contact link names
     if contacts_list:
         for c in contacts_list:
@@ -687,7 +537,7 @@ def create_support_ticket(
                         "mobile_no": phone_no,
                         "designation": designation,
                         "company_name": customer_name,
-                        "tpoc": 1 if (c.get("is_primary") or c.get("is_primary_contact") or c.get("tpoc") or c.get("custom_tpoc")) else 0
+                        "tpoc": 1 if (c.get("is_primary") or c.get("is_primary_contact") or c.get("tpoc")) else 0
                     })
     
     # Priority handling
@@ -1049,24 +899,6 @@ def get_ticket_details(ticket_name):
         ignore_permissions=True
     )
 
-    try:
-        comment_names = frappe.get_all("Comment", filters={"reference_doctype": "Issue", "reference_name": ticket_name}, pluck="name", ignore_permissions=True) or []
-        comm_names = frappe.get_all("Communication", filters={"reference_doctype": "Issue", "reference_name": ticket_name}, pluck="name", ignore_permissions=True) or []
-
-        extra_files = []
-        if comment_names:
-            extra_files.extend(frappe.get_all("File", filters=[["attached_to_doctype", "=", "Comment"], ["attached_to_name", "in", comment_names]], fields=["name", "file_name", "file_url", "file_size", "creation"], ignore_permissions=True))
-        if comm_names:
-            extra_files.extend(frappe.get_all("File", filters=[["attached_to_doctype", "=", "Communication"], ["attached_to_name", "in", comm_names]], fields=["name", "file_name", "file_url", "file_size", "creation"], ignore_permissions=True))
-
-        for ef in extra_files:
-            if not any(a.get("name") == ef.get("name") or a.get("file_url") == ef.get("file_url") for a in attachments):
-                attachments.append(ef)
-
-        attachments.sort(key=lambda x: str(x.get("creation") or ""), reverse=True)
-    except Exception as ex:
-        frappe.log_error(f"Error fetching extra attachments for {ticket_name}: {ex}")
-
     working_agent_details = resolve_user_meta(issue.working_agent)
     raised_by_details = resolve_user_meta(issue.raised_by)
     
@@ -1327,60 +1159,7 @@ def get_ticket_details(ticket_name):
     
     cust_val = issue.customer or getattr(issue, "customer_name", "") or getattr(issue, "custom_customer", "") or ""
     
-    email_logs = []
-    try:
-        if frappe.db.exists("DocType", "Communication"):
-            comms = frappe.get_all("Communication",
-                filters=[
-                    ["reference_doctype", "=", "Issue"],
-                    ["reference_name", "=", ticket_name],
-                    ["communication_type", "in", ["Communication", "Automated Message"]]
-                ],
-                fields=["name", "subject", "recipients", "cc", "bcc", "creation", "delivery_status", "sender", "content"],
-                order_by="creation desc",
-                ignore_permissions=True
-            )
-            for c in comms:
-                st = (c.get("delivery_status") or "Sent").capitalize()
-                is_sent = st in ("Sent", "Delivered", "Read", "Completed")
-                email_logs.append({
-                    "name": c.name,
-                    "subject": c.subject or f"Ticket No: {ticket_name}",
-                    "status": "sent" if is_sent else "fail",
-                    "status_text": st if st else "Sent",
-                    "creation": str(c.creation),
-                    "recipients": c.recipients or "N/A",
-                    "sender": c.sender or "",
-                    "cc": c.get("cc") or "",
-                    "bcc": c.get("bcc") or "",
-                    "content": c.content or ""
-                })
-    except Exception as e:
-        frappe.log_error(f"Error fetching email logs for issue {ticket_name}: {e}", "Portal Ticket Details")
-
-    comments_list = []
-    try:
-        if frappe.db.exists("DocType", "Comment"):
-            raw_comments = frappe.get_all("Comment",
-                filters={"reference_doctype": "Issue", "reference_name": ticket_name, "comment_type": "Comment"},
-                fields=["name", "comment_by", "comment_email", "content", "creation"],
-                order_by="creation asc",
-                ignore_permissions=True
-            )
-            for cm in raw_comments:
-                user_meta = resolve_user_meta(cm.comment_email or cm.comment_by)
-                comments_list.append({
-                    "name": cm.name,
-                    "sender": cm.comment_email or cm.comment_by,
-                    "sender_full_name": user_meta.get("full_name") or cm.comment_by or "User",
-                    "content": cm.content or "",
-                    "creation": str(cm.creation)
-                })
-    except Exception as e:
-        frappe.log_error(f"Error fetching comments for issue {ticket_name}: {e}", "Portal Ticket Details")
-
     return {
-        "comments": comments_list,
         "assignees": assignees,
         "assignees_details": assignees_details,
         "name": issue.name,
@@ -1414,8 +1193,6 @@ def get_ticket_details(ticket_name):
         "resolution_by": str(issue.resolution_by) if issue.resolution_by else None,
         "sla_resolution_by": str(issue.sla_resolution_by) if issue.sla_resolution_by else None,
         "response_by": str(issue.response_by) if issue.get("response_by") else None,
-        "first_responded_on": str(issue.first_responded_on) if issue.get("first_responded_on") else None,
-        "resolution_date": str(issue.resolution_date) if issue.get("resolution_date") else None,
         "sla_t1": str(issue.get("sla_t1")) if issue.get("sla_t1") else None,
         "sla_t2": str(issue.get("sla_t2")) if issue.get("sla_t2") else None,
         "sla_t3": str(issue.get("sla_t3")) if issue.get("sla_t3") else None,
@@ -1426,8 +1203,7 @@ def get_ticket_details(ticket_name):
         "customer_contacts": customer_contacts,
         "active_renewals": active_renewals,
         "attachments": attachments,
-        "activity": customer_activity,
-        "emails": email_logs
+        "activity": customer_activity
     }
 
 @frappe.whitelist(allow_guest=False)
@@ -1756,5 +1532,3 @@ def update_ticket_contacts(ticket_name, contacts):
     issue.save(ignore_permissions=True)
     frappe.db.commit()
     return get_ticket_details(ticket_name)
-
-

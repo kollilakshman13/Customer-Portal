@@ -1,0 +1,2108 @@
+{% extends "templates/web.html" %}
+
+{% block head %}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+{% endblock %}
+
+{% block navbar %}{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block page_container %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="/assets/frappe/css/fonts/fontawesome/font-awesome.min.css">
+
+<div class="pf-shell">
+    <!-- Sidebar Backdrop -->
+    <div class="pf-sidebar-backdrop" id="sidebar-backdrop" onclick="toggleMobileSidebar(false)"></div>
+
+
+    <!-- Sidebar -->
+    <div class="pf-side">
+        <div class="pf-brand">
+            <img src="/assets/customer_portal/images/logo (3).png" alt="Logo"
+                style="max-height: 40px; max-width: 100%; object-fit: contain;">
+        </div>
+        <nav class="pf-nav">
+            <a class="on" onclick="pfGo('overview',this)"><i class="ti ti-layout-dashboard"></i> Overview</a>
+            <a onclick="pfGo('renewals',this)"><i class="ti ti-refresh"></i> Renewals</a>
+            <a onclick="pfGo('invoices',this)"><i class="ti ti-file-invoice"></i> Invoices</a>
+            <a onclick="pfGo('orders',this)"><i class="ti ti-package"></i> Orders</a>
+            <a onclick="pfGo('support',this)"><i class="ti ti-headset"></i> Support</a>
+            <a onclick="pfGo('contacts',this)"><i class="ti ti-users"></i> Contacts</a>
+            <a onclick="pfGo('settings',this)"><i class="ti ti-settings"></i> Account settings</a>
+        </nav>
+        <div class="pf-side-footer">
+            <div class="pf-account" id="pf-account-btn" onclick="toggleAccountDropdown(event)">
+                <div class="av" id="sidebar-avatar">--</div>
+                <div class="who" style="flex:1;overflow:hidden;">
+                    <b id="sidebar-user" title="Loading..."
+                        style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Loading...</b>
+                    <span id="sidebar-company" title="Loading..."
+                        style="display:block;font-size:11.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Loading...</span>
+                </div>
+                <i class="ti ti-chevron-up" style="color:var(--ink-soft);font-size:14px;margin-left:4px;"></i>
+
+                <!-- Account Dropdown Menu -->
+                <div class="pf-account-dropdown" id="pf-account-dropdown" onclick="event.stopPropagation()">
+                    <a class="pf-acc-item" onclick="pfGoByName('settings'); closeAccountDropdown();">
+                        <i class="ti ti-settings"></i> Account Settings
+                    </a>
+                    <div class="pf-acc-divider"></div>
+                    <a class="pf-acc-item pf-acc-logout" onclick="handleLogout()">
+                        <i class="ti ti-logout"></i> Log out
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main -->
+    <div class="pf-main">
+
+        <!-- ===== OVERVIEW ===== -->
+        <div class="pf-page on" id="page-overview">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Welcome back, <span id="overview-username">User</span></h1>
+                    <div class="pf-sub">Here's what's happening with your account</div>
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <button class="pf-btn" onclick="pfGoByName('support')"><i class="ti ti-headset"></i> Contact
+                        support</button>
+                    <button class="pf-btn primary" onclick="pfGoByName('renewals')"><i class="ti ti-refresh"></i>
+                        Renew now</button>
+                </div>
+            </div>
+
+            <div class="pf-banner" id="overview-banner" style="display: none;">
+                <i class="ti ti-alert-triangle"></i>
+                <div>
+                    <div class="t" id="overview-banner-title">Your license renews soon</div>
+                    <div class="d" id="overview-banner-subtitle"></div>
+                </div>
+                <button class="pf-btn primary act" onclick="pfGoByName('renewals')">Renew now</button>
+            </div>
+
+            <div class="pf-stats">
+                <div class="pf-stat" onclick="goToPageWithFilter('renewals', 'Active')" style="cursor: pointer;">
+                    <div class="l">Active licenses</div>
+                    <div class="n" id="stat-active-licenses">0</div>
+                </div>
+                <div class="pf-stat" onclick="goToPageWithFilter('invoices', 'Overdue')" style="cursor: pointer;">
+                    <div class="l">Open invoices</div>
+                    <div class="n" id="stat-open-invoices">₹0 <small id="stat-open-invoices-sub">· 0 due</small></div>
+                </div>
+                <div class="pf-stat" onclick="goToPageWithFilter('support', 'Open')" style="cursor: pointer;">
+                    <div class="l">Open support tickets</div>
+                    <div class="n" id="stat-open-tickets">0</div>
+                </div>
+                <div class="pf-stat" onclick="goToPageWithFilter('renewals', 'Active')" style="cursor: pointer;">
+                    <div class="l">Next renewal</div>
+                    <div class="n" id="stat-next-renewal">-</div>
+                </div>
+            </div>
+
+            <div class="pf-quick">
+                <div class="pf-qa" onclick="pfGoByName('invoices')"><i class="ti ti-download"></i>
+                    <div class="t">Download invoice</div>
+                    <div class="d" id="qa-invoice-desc">No invoices</div>
+                </div>
+                <div class="pf-qa" onclick="openNewTicketPage()"><i class="ti ti-ticket"></i>
+                    <div class="t">Raise a ticket</div>
+                    <div class="d">Avg. reply in 4h</div>
+                </div>
+                <div class="pf-qa" onclick="cpOpenAddContactModalStandalone()"><i class="ti ti-user-plus"></i>
+                    <div class="t">Add a contact</div>
+                    <div class="d" id="qa-contact-desc">0 on this account</div>
+                </div>
+                <div class="pf-qa" onclick="pfGoByName('settings')"><i class="ti ti-file-text"></i>
+                    <div class="t">View details</div>
+                    <div class="d" id="qa-settings-desc">Manage account</div>
+                </div>
+            </div>
+
+            <div class="pf-section" id="overview-order-section" style="display: none;">
+                <div class="pf-section-head">
+                    <h3 id="overview-order-title">Order # — in progress</h3><a onclick="pfGoByName('orders')">View
+                        details</a>
+                </div>
+                <div class="pf-track" id="overview-order-track">
+                </div>
+                <div id="overview-order-footer" style="padding:6px 18px 16px;font-size:12px;color:var(--ink-soft);">
+                </div>
+            </div>
+
+            <div class="pf-section">
+                <div class="pf-section-head">
+                    <h3>Recent invoices</h3><a onclick="pfGoByName('invoices')">View all</a>
+                </div>
+                <div id="overview-invoices-list">
+                </div>
+            </div>
+
+            <div class="pf-section">
+                <div class="pf-section-head">
+                    <h3>Support tickets</h3><a onclick="openNewTicketPage()">Raise new</a>
+                </div>
+                <div id="overview-tickets-list">
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== RENEWALS ===== -->
+        <div class="pf-page" id="page-renewals">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Renewals</h1>
+                    <div class="pf-sub" id="renewals-sub-title">0 licenses on this account</div>
+                </div>
+            </div>
+            <div class="pf-toolbar">
+                <div class="pf-search"><i class="ti ti-search"></i><input id="renewal-search-input"
+                        placeholder="Search by renewal ID, product, invoice…" oninput="filterRenewals()">
+                </div>
+                <div class="pf-filterchip"><i class="ti ti-filter"></i> Status: <select id="renewal-status-filter"
+                        onchange="filterRenewals()">
+                        <option value="All">All</option>
+                    </select></div>
+            </div>
+            <div class="pf-section" id="renewals-list">
+            </div>
+            <div class="pf-list-footer">
+                <div class="pf-page-size-selector">
+                    <span>Show:</span>
+                    <select id="renewal-page-size" onchange="changePageSize('renewals')">
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div class="pf-record-count" id="renewal-record-count">Showing 0 of 0</div>
+                <button class="pf-btn-more" id="renewal-load-more" onclick="loadMoreRecords('renewals')">Load
+                    More</button>
+            </div>
+        </div>
+
+
+        <!-- ===== RENEWAL DETAIL PAGE ===== -->
+        <div class="pf-page" id="page-renewal-detail">
+            <!-- Page top with back nav -->
+            <button class="pf-back-btn" onclick="pfGoByName('renewals')">
+                <i class="ti ti-arrow-left"></i> Back to Renewals
+            </button>
+            <div class="pf-top">
+                <div class="pf-detail-top-left">
+                    <h1 class="pf-h1" id="rd-name">Renewal</h1>
+                    <div class="pf-sub" id="rd-product">-</div>
+                </div>
+                <div id="rd-status-row" class="pf-detail-status-row">
+                    <span class="pf-pill" id="rd-status-pill">-</span>
+                    <span class="pf-detail-amount" id="rd-amount">-</span>
+                </div>
+            </div>
+
+            <!-- Hero info cards -->
+            <div class="pf-detail-hero">
+                <div class="pf-detail-hero-card indigo">
+                    <div class="pf-dhc-icon"><i class="ti ti-calendar-event"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Start Date</div>
+                        <div class="pf-dhc-val" id="rd-start">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card amber">
+                    <div class="pf-dhc-icon"><i class="ti ti-calendar-due"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">End / Renewal Date</div>
+                        <div class="pf-dhc-val" id="rd-end">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card green">
+                    <div class="pf-dhc-icon"><i class="ti ti-users"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Qty</div>
+                        <div class="pf-dhc-val" id="rd-qty">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card purple">
+                    <div class="pf-dhc-icon"><i class="ti ti-currency-rupee"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Total Amount</div>
+                        <div class="pf-dhc-val" id="rd-amount-hero">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detail sections -->
+            <div class="pf-detail-grid">
+
+                <!-- Left column -->
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Renewal
+                                Details</h3>
+                        </div>
+                        <div class="pf-dg pf-dg-inner">
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Renewal ID</div>
+                                <div class="pf-dg-val pf-dg-mono" id="rd-id">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Invoice No.</div>
+                                <div class="pf-dg-val pf-dg-mono" id="rd-invoice">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Rate</div>
+                                <div class="pf-dg-val" id="rd-rate">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Company</div>
+                                <div class="pf-dg-val" id="rd-company">-</div>
+                            </div>
+                            <div class="pf-dg-item" id="rd-domain-wrap">
+                                <div class="pf-dg-label">Domain</div>
+                                <div class="pf-dg-val" id="rd-domain">-</div>
+                            </div>
+                            <div class="pf-dg-item" id="rd-opp-wrap">
+                                <div class="pf-dg-label">Opportunity ID</div>
+                                <div class="pf-dg-val" id="rd-opp">-</div>
+                            </div>
+                            <div class="pf-dg-item" id="rd-sla-wrap">
+                                <div class="pf-dg-label">SLA Type</div>
+                                <div class="pf-dg-val" id="rd-sla">-</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Items Table Section -->
+                    <div class="pf-section" id="rd-items-wrap">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-box" style="margin-right:6px;color:var(--indigo)"></i>Items Included
+                                (<span id="rd-items-count">0</span>)</h3>
+                        </div>
+                        <div class="pf-table-wrapper">
+                            <table class="pf-table">
+                                <thead>
+                                    <tr>
+                                        <th>Item / Product</th>
+                                        <th style="text-align:center;">Qty</th>
+                                        <th style="text-align:right;">Rate</th>
+                                        <th style="text-align:right;">Amount</th>
+                                        <th style="text-align:center;">Period</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="rd-items-tbody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Description / Notes -->
+                    <div class="pf-section" id="rd-desc-wrap" style="display:none;">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-notes" style="margin-right:6px;color:var(--indigo)"></i>Description</h3>
+                        </div>
+                        <div class="pf-detail-text" id="rd-desc"></div>
+                    </div>
+                    <div class="pf-section" id="rd-note-wrap" style="display:none;">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-message" style="margin-right:6px;color:var(--indigo)"></i>Notes</h3>
+                        </div>
+                        <div class="pf-detail-text" id="rd-note"></div>
+                    </div>
+                </div>
+
+                <!-- Right column -->
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-user-circle" style="margin-right:6px;color:var(--indigo)"></i>Account
+                                Team</h3>
+                        </div>
+                        <div class="pf-dg pf-dg-inner pf-dg-1col">
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Salesperson</div>
+                                <div class="pf-dg-val" id="rd-sales-user">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Renewal Owner</div>
+                                <div class="pf-dg-val" id="rd-owner">-</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Days left countdown -->
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-clock" style="margin-right:6px;color:var(--indigo)"></i>Renewal Timeline
+                            </h3>
+                        </div>
+                        <div class="pf-detail-countdown" id="rd-countdown-wrap">
+                            <div class="pf-dc-number" id="rd-days-left">-</div>
+                            <div class="pf-dc-label" id="rd-days-label">days until renewal</div>
+                            <div class="pf-dc-bar-wrap">
+                                <div class="pf-dc-bar" id="rd-progress-bar"></div>
+                            </div>
+                            <div class="pf-dc-dates">
+                                <span id="rd-tl-start">-</span>
+                                <span id="rd-tl-end">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== INVOICE DETAIL PAGE ===== -->
+        <div class="pf-page" id="page-invoice-detail">
+            <button class="pf-back-btn" onclick="pfGoByName('invoices')">
+                <i class="ti ti-arrow-left"></i> Back to Invoices
+            </button>
+            <div class="pf-top">
+                <div class="pf-detail-top-left">
+                    <h1 class="pf-h1" id="id-name">Invoice</h1>
+                    <div class="pf-sub" id="id-sub">Sales Invoice Details</div>
+                </div>
+                <div class="pf-detail-status-row">
+                    <span class="pf-pill" id="id-status-pill">-</span>
+                    <span class="pf-detail-amount" id="id-amount">-</span>
+                    <button class="pf-btn primary sm" id="id-download-btn"><i class="ti ti-printer"></i> Download
+                        PDF</button>
+                </div>
+            </div>
+
+            <div class="pf-detail-hero">
+                <div class="pf-detail-hero-card indigo">
+                    <div class="pf-dhc-icon"><i class="ti ti-calendar-event"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Posting Date</div>
+                        <div class="pf-dhc-val" id="id-posting-date">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card amber">
+                    <div class="pf-dhc-icon"><i class="ti ti-calendar-due"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Due Date</div>
+                        <div class="pf-dhc-val" id="id-due-date">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card purple">
+                    <div class="pf-dhc-icon"><i class="ti ti-currency-rupee"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Grand Total</div>
+                        <div class="pf-dhc-val" id="id-grand-total">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card green">
+                    <div class="pf-dhc-icon"><i class="ti ti-receipt-refund"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Outstanding</div>
+                        <div class="pf-dhc-val" id="id-outstanding">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pf-detail-grid">
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-box" style="margin-right:6px;color:var(--indigo)"></i>Invoice Items
+                                (<span id="id-items-count">0</span>)</h3>
+                        </div>
+                        <div class="pf-table-wrapper">
+                            <table class="pf-table">
+                                <thead>
+                                    <tr>
+                                        <th>Item / Description</th>
+                                        <th style="text-align:center;">Qty</th>
+                                        <th style="text-align:right;">Rate</th>
+                                        <th style="text-align:right;">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="id-items-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="pf-section" id="id-taxes-section" style="margin-top:16px;display:none;">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-receipt-tax" style="margin-right:6px;color:var(--indigo)"></i>Taxes & Charges Breakdown</h3>
+                        </div>
+                        <div class="pf-table-wrapper">
+                            <table class="pf-table">
+                                <thead>
+                                    <tr>
+                                        <th>Tax Description</th>
+                                        <th style="text-align:center;">Rate</th>
+                                        <th style="text-align:right;">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="id-taxes-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Invoice
+                                Summary</h3>
+                        </div>
+                        <div class="pf-dg pf-dg-inner pf-dg-1col">
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Invoice Number</div>
+                                <div class="pf-dg-val pf-dg-mono" id="id-number">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Net Total</div>
+                                <div class="pf-dg-val" id="id-net-total">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Taxes & Charges</div>
+                                <div class="pf-dg-val" id="id-taxes-total">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Company</div>
+                                <div class="pf-dg-val" id="id-company">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Currency</div>
+                                <div class="pf-dg-val" id="id-currency">INR</div>
+                            </div>
+                            <div class="pf-dg-item" id="id-remarks-wrap" style="display:none;">
+                                <div class="pf-dg-label">Remarks</div>
+                                <div class="pf-dg-val" id="id-remarks"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== ORDER DETAIL PAGE ===== -->
+        <div class="pf-page" id="page-order-detail">
+            <button class="pf-back-btn" onclick="pfGoByName('orders')">
+                <i class="ti ti-arrow-left"></i> Back to Orders
+            </button>
+            <div class="pf-top">
+                <div class="pf-detail-top-left">
+                    <h1 class="pf-h1" id="od-name">Order</h1>
+                    <div class="pf-sub" id="od-sub">Sales Order Details</div>
+                </div>
+                <div class="pf-detail-status-row">
+                    <span class="pf-pill" id="od-status-pill">-</span>
+                    <span class="pf-detail-amount" id="od-amount">-</span>
+                </div>
+            </div>
+
+            <div class="pf-detail-hero">
+                <div class="pf-detail-hero-card indigo">
+                    <div class="pf-dhc-icon"><i class="ti ti-calendar-event"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Order Date</div>
+                        <div class="pf-dhc-val" id="od-date">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card amber">
+                    <div class="pf-dhc-icon"><i class="ti ti-truck-delivery"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Delivery Date</div>
+                        <div class="pf-dhc-val" id="od-delivery-date">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card purple">
+                    <div class="pf-dhc-icon"><i class="ti ti-currency-rupee"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Total Amount</div>
+                        <div class="pf-dhc-val" id="od-total">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card green">
+                    <div class="pf-dhc-icon"><i class="ti ti-package-export"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Delivery Status</div>
+                        <div class="pf-dhc-val" id="od-deliv-status">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Delivery Tracking Banner -->
+            <div class="pf-section">
+                <div class="pf-section-head">
+                    <h3><i class="ti ti-truck" style="margin-right:6px;color:var(--indigo)"></i>Order Status & Tracking
+                    </h3>
+                </div>
+                <div class="pf-track" id="od-track"></div>
+                <div id="od-track-footer" style="padding:10px 22px 18px;font-size:12.5px;color:var(--ink-soft);"></div>
+            </div>
+
+            <div class="pf-detail-grid">
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-box" style="margin-right:6px;color:var(--indigo)"></i>Ordered Items
+                                (<span id="od-items-count">0</span>)</h3>
+                        </div>
+                        <div class="pf-table-wrapper">
+                            <table class="pf-table">
+                                <thead>
+                                    <tr>
+                                        <th>Item / Description</th>
+                                        <th style="text-align:center;">Qty</th>
+                                        <th style="text-align:center;">Delivered</th>
+                                        <th style="text-align:right;">Rate</th>
+                                        <th style="text-align:right;">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="od-items-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-info-circle" style="margin-right:6px;color:var(--indigo)"></i>Order Info
+                            </h3>
+                        </div>
+                        <div class="pf-dg pf-dg-inner pf-dg-1col">
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Order Number</div>
+                                <div class="pf-dg-val pf-dg-mono" id="od-number">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Company</div>
+                                <div class="pf-dg-val" id="od-company">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Status</div>
+                                <div class="pf-dg-val" id="od-status-val">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== SUPPORT TICKET DETAIL PAGE ===== -->
+        <div class="pf-page" id="page-support-detail">
+            <button class="pf-back-btn" onclick="pfGoByName('support')">
+                <i class="ti ti-arrow-left"></i> Back to Support
+            </button>
+            <!-- Header & Meta Bar -->
+            <div class="pf-detail-header-card">
+                <div class="pf-detail-top-left">
+                    <h1 class="pf-h1" id="sd-subject">Ticket Subject</h1>
+                </div>
+
+                <!-- Badges Row -->
+                <div class="pf-detail-badges-row" id="sd-badges-row">
+                    <span class="pf-badge p-amber" id="sd-priority-pill" style="display:none;">Medium</span>
+                    <span class="pf-badge p-purple" id="sd-category-pill" style="display:none;">Category</span>
+                    <span class="pf-badge p-red" id="sd-support-type-pill" style="display:none;">Physical Support</span>
+                    <span class="pf-badge p-status" id="sd-status-pill">Open</span>
+                    <span class="pf-badge p-visit" id="sd-tech-visit-pill" style="display:none;">Technician Visit:
+                        Scheduled</span>
+                </div>
+
+                <!-- Meta Line -->
+                <div class="pf-detail-meta-bar">
+                    <span><i class="ti ti-clock"></i> <b>Created:</b> <strong id="sd-created">-</strong></span>
+                    <span><i class="ti ti-building"></i> <b>Customer:</b> <strong id="sd-customer">-</strong></span>
+                    <span id="sd-location-wrap" style="display:none;"><i class="ti ti-map-pin"></i> <b>Location:</b>
+                        <strong id="sd-location">-</strong></span>
+                </div>
+            </div>
+
+            <div class="pf-detail-grid" style="margin-top:20px;">
+                <!-- Left Column -->
+                <div class="pf-detail-col">
+                    <!-- Issue Description -->
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-align-left" style="margin-right:6px;color:var(--indigo)"></i>Issue
+                                Description</h3>
+                        </div>
+                        <div class="pf-detail-text" id="sd-description">No description provided.</div>
+                    </div>
+
+                    <!-- Scope of Work Section -->
+                    <div class="pf-section sd-scope-card" id="sd-scope-section" style="display:none;">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-briefcase" style="margin-right:6px;color:var(--indigo)"></i>Scope of
+                                Work</h3>
+                            <button type="button" id="sd-scope-view-btn" class="sd-scope-view-btn" style="display:none;"
+                                onclick="togglePortalScopeExpand()">
+                                <i class="ti ti-chevron-down" id="sd-scope-view-icon"></i>
+                                <span id="sd-scope-view-text">View More</span>
+                            </button>
+                        </div>
+                        <div class="sd-scope-body">
+                            <!-- Preview / Full Content (truncated by default, expands inline) -->
+                            <div id="sd-scope-preview" class="sd-scope-preview pf-detail-text" style="display:none;">
+                            </div>
+                            <!-- Empty state -->
+                            <div id="sd-scope-empty" class="sd-scope-empty" style="display:none;">
+                                <div class="sd-scope-empty-icon">
+                                    <i class="ti ti-file-description"></i>
+                                </div>
+                                <div class="sd-scope-empty-text">No scope of work has been defined for this ticket
+                                    yet.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Required Checklist Points Section -->
+                    <div class="pf-section" id="sd-checklist-section"
+                        style="display:none; padding: 0; overflow: hidden; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; margin-bottom: 20px;">
+                        <!-- Header -->
+                        <div
+                            style="padding: 14px 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <i class="ti ti-checkbox" style="font-size: 18px; color: #4f46e5;"></i>
+                                <span style="font-size: 14px; font-weight: 700; color: #1e293b;">Required Checklist
+                                    Points</span>
+                            </div>
+                        </div>
+
+                        <!-- Overall Bar (Image 2 Layout) -->
+                        <div
+                            style="padding: 16px 20px; background: #ffffff; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 20px;">
+                            <div style="display: flex; flex-direction: column; min-width: 140px;">
+                                <div style="font-size: 14px; font-weight: 700; color: #1e293b;">Resolution Checklist
+                                </div>
+                                <div style="font-size: 12px; color: #64748b;">Track all support levels</div>
+                            </div>
+                            <div id="sd-chk-pct"
+                                style="font-size: 28px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px;">0%
+                            </div>
+                            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+                                <div
+                                    style="height: 8px; background: #e2e8f0; border-radius: 10px; overflow: hidden; width: 100%;">
+                                    <div id="sd-chk-bar"
+                                        style="height: 100%; border-radius: 10px; background: linear-gradient(90deg, #22c55e, #16a34a); width: 0%; transition: width 0.4s ease;">
+                                    </div>
+                                </div>
+                                <div
+                                    style="display: flex; align-items: center; gap: 14px; font-size: 12px; color: #475569; flex-wrap: wrap;">
+                                    <div style="display: flex; align-items: center; gap: 5px;">
+                                        <span
+                                            style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></span>
+                                        <span><strong id="sd-chk-cnt-done" style="font-weight:700;">0</strong>
+                                            Done</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 5px;">
+                                        <span
+                                            style="width: 8px; height: 8px; border-radius: 50%; background: #a855f7;"></span>
+                                        <span><strong id="sd-chk-cnt-esc" style="font-weight:700;">0</strong>
+                                            Escalated</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 5px;">
+                                        <span
+                                            style="width: 8px; height: 8px; border-radius: 50%; background: #eab308;"></span>
+                                        <span><strong id="sd-chk-cnt-pending" style="font-weight:700;">0</strong>
+                                            Pending</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 5px;">
+                                        <span
+                                            style="width: 8px; height: 8px; border-radius: 50%; background: #94a3b8;"></span>
+                                        <span><strong id="sd-chk-cnt-na" style="font-weight:700;">0</strong> N/A</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Checklist Items Container -->
+                        <div id="sd-checklist-container" style="display: flex; flex-direction: column;"></div>
+
+                        <!-- Footer -->
+                        <div
+                            style="padding: 12px 20px; background: #f8fafc; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+                            <span style="font-size: 13px; color: #64748b; font-weight: 500;">Checklist Completion</span>
+                            <span id="sd-chk-completion-ratio"
+                                style="font-size: 17px; font-weight: 800; color: #2563eb;">0/0</span>
+                        </div>
+                    </div>
+
+                    <!-- Resolution Details Section -->
+                    <div class="pf-section" id="sd-resolution-section" style="display:none;">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-circle-check" style="margin-right:6px;color:var(--green)"></i>Resolution
+                                Details</h3>
+                        </div>
+                        <div class="pf-resolution-box">
+                            <div class="pf-detail-text" id="sd-resolution-text">-</div>
+                            <div style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);display:flex;gap:16px;">
+                                <span><strong>Resolved On:</strong> <span id="sd-resolution-date">-</span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Customer Inline Reply Box -->
+                    <div class="pf-section" id="sd-reply-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-message-dots" style="margin-right:6px;color:var(--indigo)"></i>Post a
+                                Reply</h3>
+                        </div>
+                        <div class="pf-reply-box-wrap">
+                            <textarea id="sd-reply-input" class="pf-reply-textarea" rows="3"
+                                placeholder="Type your reply or additional details for the support team..."></textarea>
+                            <div id="sd-reply-attachments-preview"
+                                style="display:flex;flex-wrap:wrap;gap:8px;padding:6px 0;margin-top:4px;"></div>
+                            <div class="pf-reply-actions"
+                                style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                                <label class="pf-btn secondary sm"
+                                    style="cursor:pointer;margin:0;display:inline-flex;align-items:center;gap:6px;">
+                                    <input type="file" id="sd-reply-file-input" multiple style="display:none;"
+                                        onchange="handleReplyFileUpload(event)">
+                                    <i class="ti ti-paperclip"></i> Attach File
+                                </label>
+                                <button class="pf-btn primary sm" id="sd-reply-submit-btn"
+                                    onclick="submitPortalTicketReply()">
+                                    <i class="ti ti-send"></i> Send Reply
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Activity & Reply Timeline -->
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-timeline" style="margin-right:6px;color:var(--indigo)"></i>Activity
+                                Timeline</h3>
+                        </div>
+                        <div class="pf-timeline-container" id="sd-timeline-list">
+                            <div style="padding:16px;text-align:center;color:var(--ink-soft);font-size:13px;">No replies
+                                or comments recorded yet.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column (Sidebar) -->
+                <div class="pf-detail-col">
+                    <!-- SLA & Timeline Card -->
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-clock-shield" style="margin-right:6px;color:var(--indigo)"></i>SLA &
+                                TIMELINE</h3>
+                        </div>
+                        <div class="pf-sla-tiers-wrap">
+                            <div class="pf-sla-subhead">RESPONSE SLA (TIERS)</div>
+                            <div id="sd-sla-tiers-container" class="pf-sla-tiers-list">
+                                <div class="pf-sla-tier-item">
+                                    <div class="pf-sla-t-num done">✓</div>
+                                    <div class="pf-sla-t-body">
+                                        <div class="pf-sla-t-title">L1 Support <span class="pf-sla-t-status claimed"
+                                                id="sd-sla-l1-status">Assigned</span></div>
+                                        <div class="pf-sla-t-meta" id="sd-sla-l1-meta">Deadline: -</div>
+                                    </div>
+                                </div>
+                                <div class="pf-sla-tier-item">
+                                    <div class="pf-sla-t-num">2</div>
+                                    <div class="pf-sla-t-body">
+                                        <div class="pf-sla-t-title">L2 Support <span class="pf-sla-t-status"
+                                                id="sd-sla-l2-status">Unassigned</span></div>
+                                        <div class="pf-sla-t-meta" id="sd-sla-l2-meta">Deadline: -</div>
+                                    </div>
+                                </div>
+                                <div class="pf-sla-tier-item">
+                                    <div class="pf-sla-t-num">3</div>
+                                    <div class="pf-sla-t-body">
+                                        <div class="pf-sla-t-title">L3 Support <span class="pf-sla-t-status"
+                                                id="sd-sla-l3-status">Unassigned</span></div>
+                                        <div class="pf-sla-t-meta" id="sd-sla-l3-meta">Deadline: -</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- RESOLUTION SLA -->
+                            <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:14px;">
+                                <div class="pf-sla-subhead" style="margin-bottom:6px;">RESOLUTION SLA</div>
+                                <div id="sd-resolution-sla-box">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                                        <span id="sd-resolution-sla-date"
+                                            style="font-size:12.5px;font-weight:600;color:var(--ink);">-</span>
+                                        <span id="sd-resolution-sla-status"
+                                            style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;background:rgba(0,0,0,0.05);color:var(--ink-soft);white-space:nowrap;">-</span>
+                                    </div>
+                                    <div id="sd-resolution-sla-bar-wrap" style="margin-top:8px;display:none;">
+                                        <div
+                                            style="width:100%;height:6px;background:rgba(0,0,0,0.08);border-radius:99px;overflow:hidden;">
+                                            <div id="sd-resolution-sla-bar"
+                                                style="width:0%;height:100%;border-radius:99px;background:var(--indigo);transition:width 0.3s ease;">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- TIMESTAMPS: CREATED ON & LAST UPDATE ON -->
+                            <div
+                                style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px;display:flex;flex-direction:column;gap:12px;">
+                                <div>
+                                    <div class="pf-sla-subhead" style="margin-bottom:2px;">CREATED ON</div>
+                                    <div id="sd-sla-created-on"
+                                        style="font-size:12.5px;font-weight:600;color:var(--ink);">-</div>
+                                </div>
+                                <div>
+                                    <div class="pf-sla-subhead" style="margin-bottom:2px;">LAST UPDATE ON</div>
+                                    <div id="sd-sla-updated-on"
+                                        style="font-size:12.5px;font-weight:600;color:var(--ink);">-</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ASSIGNMENTS Card Section (Above USER DETAILS) -->
+                    <div class="pf-section" id="sd-assignments-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-user-check" style="margin-right:6px;color:var(--indigo)"></i>ASSIGNMENTS
+                            </h3>
+                        </div>
+                        <div style="padding:14px 16px;">
+                            <div id="sd-assignments-container"
+                                style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                                <span style="font-size:12.5px; color:var(--ink-soft);">No assignments</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- USER DETAILS Card Section -->
+                    <div class="pf-section" id="sd-userdetails-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-users" style="margin-right:6px;color:var(--indigo)"></i>USER DETAILS
+                            </h3>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:10px;padding:12px 16px;">
+                            <!-- Assigned To -->
+                            <div class="pf-user-card-item" id="sd-assignedto-card" style="display:none;">
+                                <div class="pf-uc-label">Assigned To</div>
+                                <div class="pf-uc-row">
+                                    <div class="pf-uc-av" id="sd-assignedto-av" style="background:#f59e0b;">--</div>
+                                    <div>
+                                        <div class="pf-uc-name" id="sd-assignedto-name">-</div>
+                                        <div class="pf-uc-role" id="sd-assignedto-role">-</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Raised By -->
+                            <div class="pf-user-card-item" id="sd-raisedby-card">
+                                <div class="pf-uc-label">Raised By</div>
+                                <div class="pf-uc-row">
+                                    <div class="pf-uc-av" id="sd-raised-by-av" style="background:#6366f1;">--</div>
+                                    <div>
+                                        <div class="pf-uc-name" id="sd-raised-by-name">-</div>
+                                        <div class="pf-uc-role" id="sd-raised-by-role">-</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sales Person -->
+                            <div class="pf-user-card-item" id="sd-salesperson-card" style="display:none;">
+                                <div class="pf-uc-label">Sales Person</div>
+                                <div class="pf-uc-row">
+                                    <div class="pf-uc-av" id="sd-salesperson-av" style="background:#3b82f6;">--</div>
+                                    <div>
+                                        <div class="pf-uc-name" id="sd-salesperson-name">-</div>
+                                        <div class="pf-uc-role" id="sd-salesperson-role">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Contact Details Card -->
+                    <div class="pf-section" id="sd-contacts-section">
+                        <div class="pf-section-head"
+                            style="display:flex;justify-content:space-between;align-items:center;">
+                            <h3 style="margin:0;"><i class="ti ti-address-book"
+                                    style="margin-right:6px;color:var(--indigo)"></i>CONTACT DETAILS</h3>
+                            <button type="button" class="pf-btn btn-sm" onclick="cpOpenTicketDetailContactModal()"
+                                style="font-size:12px;padding:4px 10px;">
+                                <i class="ti ti-user-plus" style="margin-right:4px;"></i> Add Contact
+                            </button>
+                        </div>
+                        <div id="sd-contacts-list"
+                            style="display:flex;flex-direction:column;gap:10px;padding:12px 16px;">
+                            <div style="color:var(--ink-soft);font-size:13px;text-align:center;">No contact persons
+                                linked.</div>
+                        </div>
+                    </div>
+
+                    <!-- Asset Details -->
+                    <div class="pf-section" id="sd-renewals-section" style="display:none;">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-device-desktop" style="margin-right:6px;color:var(--indigo)"></i>ASSET
+                            </h3>
+                        </div>
+                        <div id="sd-renewals-list"
+                            style="display:flex;flex-direction:column;gap:8px;padding:12px 16px;">
+                        </div>
+                    </div>
+
+                    <!-- Attachments -->
+                    <div class="pf-section">
+                        <div class="pf-section-head"
+                            style="display:flex;align-items:center;justify-content:space-between;">
+                            <h3><i class="ti ti-paperclip" style="margin-right:6px;color:var(--indigo)"></i>Attachments
+                            </h3>
+                            <label class="pf-btn secondary sm"
+                                style="cursor:pointer;margin:0;font-size:12px;padding:4px 10px;display:inline-flex;align-items:center;gap:4px;">
+                                <input type="file" id="sd-direct-file-input" multiple style="display:none;"
+                                    onchange="handleDirectAttachmentUpload(event)">
+                                <i class="ti ti-plus"></i> Add Attachment
+                            </label>
+                        </div>
+                        <div id="sd-attachments-list"
+                            style="display:flex;flex-direction:column;gap:8px;padding:12px 16px;">
+                            <div style="padding:4px 0;text-align:center;color:var(--ink-soft);font-size:13px;">No
+                                attachments for this ticket.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+
+        <!-- ===== RAISE NEW SUPPORT TICKET PAGE ===== -->
+        <div class="pf-page" id="page-support-new">
+            <button class="pf-back-btn" onclick="pfGoByName('support')">
+                <i class="ti ti-arrow-left"></i> Back to Support
+            </button>
+            <div class="pf-top">
+                <div class="pf-detail-top-left">
+                    <h1 class="pf-h1">Raise a New Ticket</h1>
+                    <div class="pf-sub">Submit your technical issue or service request to our support team</div>
+                </div>
+            </div>
+
+            <!-- WIZARD STEPPER TRACK (4 STEPS) -->
+            <div class="cp-wiz-stepper-wrap">
+                <div class="cp-wiz-stepper">
+                    <div class="cp-step-item active" id="cp-step-indicator-1" onclick="cpGoToStep(1)">
+                        <div class="cp-step-num">1</div>
+                        <div class="cp-step-text">
+                            <div class="cp-step-title">Basic Info</div>
+                            <div class="cp-step-sub">Subject & Contact</div>
+                        </div>
+                    </div>
+                    <div class="cp-step-divider"></div>
+                    <div class="cp-step-item" id="cp-step-indicator-2" onclick="cpGoToStep(2)">
+                        <div class="cp-step-num">2</div>
+                        <div class="cp-step-text">
+                            <div class="cp-step-title">Classification & SLA</div>
+                            <div class="cp-step-sub">Dept, Asset & Priority</div>
+                        </div>
+                    </div>
+                    <div class="cp-step-divider"></div>
+                    <div class="cp-step-item" id="cp-step-indicator-3" onclick="cpGoToStep(3)">
+                        <div class="cp-step-num">3</div>
+                        <div class="cp-step-text">
+                            <div class="cp-step-title">Details & Files</div>
+                            <div class="cp-step-sub">Description & Uploads</div>
+                        </div>
+                    </div>
+                    <div class="cp-step-divider"></div>
+                    <div class="cp-step-item" id="cp-step-indicator-4" onclick="cpGoToStep(4)">
+                        <div class="cp-step-num">4</div>
+                        <div class="cp-step-text">
+                            <div class="cp-step-title">Review & Submit</div>
+                            <div class="cp-step-sub">Confirm & Create</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 1 PANEL: BASIC & CONTACT INFO -->
+            <div class="cp-step-panel active" id="cp-step-panel-1">
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3><i class="ti ti-user-check" style="margin-right:6px;color:var(--indigo)"></i>Account &
+                            Contact Details</h3>
+                    </div>
+                    <div class="pf-form" style="padding:22px;">
+                        <!-- Auto Selected Customer & Account Manager Cards -->
+                        <div class="cp-auto-info-grid">
+                            <div class="cp-auto-badge-card">
+                                <div class="cp-abc-icon"><i class="ti ti-building"></i></div>
+                                <div class="cp-abc-body">
+                                    <div class="cp-abc-label">Customer (Auto-linked)</div>
+                                    <div class="cp-abc-val" id="cp-wiz-customer-name">-</div>
+                                </div>
+                            </div>
+                            <div class="cp-auto-badge-card">
+                                <div class="cp-abc-icon purple"><i class="ti ti-user-star"></i></div>
+                                <div class="cp-abc-body">
+                                    <div class="cp-abc-label">Account Manager / Sales Person</div>
+                                    <div class="cp-abc-val" id="cp-wiz-sales-person">-</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pf-field" style="margin-top:16px;">
+                            <label>Subject <span style="color:var(--crimson)">*</span></label>
+                            <input id="ticket-subject"
+                                placeholder="Brief summary of the issue (e.g. Dell Latitude 5540 — battery not charging)">
+                        </div>
+
+                        <!-- Contact Person Picker matching ticket list model UI -->
+                        <div class="pf-field">
+                            <div
+                                style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                <label style="margin-bottom:0;">Contact Person <span
+                                        style="color:var(--crimson)">*</span></label>
+                                <button type="button" class="pf-btn btn-sm" onclick="cpOpenContactModal()">
+                                    <i class="ti ti-user-plus"></i> Add / Change Contact
+                                </button>
+                            </div>
+                            <div id="cp-wizard-contacts-list" class="cp-contacts-list">
+                                <!-- Populated dynamically with default selected contact card -->
+                            </div>
+                        </div>
+
+                        <div class="cp-wiz-footer">
+                            <div></div>
+                            <button class="pf-btn primary" onclick="cpGoNextStep(1)">
+                                Continue to Classification <i class="ti ti-arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 2 PANEL: CLASSIFICATION & SLA -->
+            <div class="cp-step-panel" id="cp-step-panel-2">
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3><i class="ti ti-category" style="margin-right:6px;color:var(--indigo)"></i>Classification &
+                            Priority</h3>
+                    </div>
+                    <div class="pf-form" style="padding:22px;">
+                        <!-- Department Model Card Picker -->
+                        <div class="pf-field">
+                            <label>Department <span style="color:var(--crimson)">*</span></label>
+                            <div id="cp-selected-dept-card" class="selected-model-card" onclick="cpOpenDeptModal()">
+                                <!-- Rendered dynamically -->
+                            </div>
+                        </div>
+
+                        <!-- Active Subscription Model Card Picker -->
+                        <div class="pf-field" id="cp-sub-grp">
+                            <label>Active Subscription / Asset</label>
+                            <div id="cp-selected-sub-card" class="selected-model-card" onclick="cpOpenSubModal()">
+                                <!-- Rendered dynamically -->
+                            </div>
+                        </div>
+
+                        <!-- Query Type / Category Model Card Picker -->
+                        <div class="pf-field" id="cp-query-type-grp">
+                            <label>Query Type <span style="color:var(--crimson)">*</span></label>
+                            <div id="cp-selected-query-card" class="selected-model-card" onclick="cpOpenQueryModal()">
+                                <!-- Rendered dynamically -->
+                            </div>
+                        </div>
+
+                        <!-- Priority Level Cards -->
+                        <div class="pf-field">
+                            <label>Priority Level <span style="color:var(--crimson)">*</span></label>
+                            <div class="cp-prio-grid" id="cp-prio-grid">
+                                <div class="cp-prio-card plow" data-priority="Low" onclick="cpSelectPriority('Low')">
+                                    <div class="cp-prio-dot">🟢</div>
+                                    <div class="cp-prio-name">Low</div>
+                                    <div class="cp-prio-sla">SLA 24h</div>
+                                </div>
+                                <div class="cp-prio-card pmed sel" data-priority="Medium"
+                                    onclick="cpSelectPriority('Medium')">
+                                    <div class="cp-prio-dot">🟡</div>
+                                    <div class="cp-prio-name">Medium</div>
+                                    <div class="cp-prio-sla">SLA 8h</div>
+                                </div>
+                                <div class="cp-prio-card phigh" data-priority="High" onclick="cpSelectPriority('High')">
+                                    <div class="cp-prio-dot">🔴</div>
+                                    <div class="cp-prio-name">High</div>
+                                    <div class="cp-prio-sla">SLA 4h</div>
+                                </div>
+                                <div class="cp-prio-card pcrit" data-priority="Critical"
+                                    onclick="cpSelectPriority('Critical')">
+                                    <div class="cp-prio-dot">🚨</div>
+                                    <div class="cp-prio-name">Critical</div>
+                                    <div class="cp-prio-sla">SLA 2h</div>
+                                </div>
+                            </div>
+                            <select id="ticket-priority" style="display:none;">
+                                <option value="Low">Low</option>
+                                <option value="Medium" selected>Medium</option>
+                                <option value="High">High</option>
+                                <option value="Critical">Critical</option>
+                            </select>
+                        </div>
+
+                        <div class="cp-wiz-footer">
+                            <button class="pf-btn" onclick="cpGoPrevStep(2)">
+                                <i class="ti ti-arrow-left"></i> Back
+                            </button>
+                            <button class="pf-btn primary" onclick="cpGoNextStep(2)">
+                                Continue to Details & Files <i class="ti ti-arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 3 PANEL: DETAILS & ATTACHMENTS (SEPARATE TAB) -->
+            <div class="cp-step-panel" id="cp-step-panel-3">
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3><i class="ti ti-file-text" style="margin-right:6px;color:var(--indigo)"></i>Issue
+                            Description & Attachments</h3>
+                    </div>
+                    <div class="pf-form" style="padding:22px;">
+                        <div class="pf-field">
+                            <label>Detailed Description <span style="color:var(--crimson)">*</span></label>
+                            <textarea id="ticket-details" rows="6"
+                                placeholder="Describe what is happening, error messages, and what steps you've already tried..."></textarea>
+                        </div>
+
+                        <!-- File Attachments Dropzone -->
+                        <div class="pf-field">
+                            <label>Attachments / Screenshots</label>
+                            <div class="cp-dropzone" id="cp-dropzone"
+                                onclick="document.getElementById('cp-file-input').click()">
+                                <i class="ti ti-cloud-upload" style="font-size:32px;color:var(--indigo);"></i>
+                                <div style="font-weight:600;margin-top:6px;color:var(--ink);">Click or drag files here
+                                    to upload</div>
+                                <div style="font-size:12px;color:var(--ink-soft);">Images, PDFs, documents up to 10MB
+                                </div>
+                                <input type="file" id="cp-file-input" multiple style="display:none;"
+                                    onchange="cpHandleFiles(this.files)">
+                            </div>
+                            <div id="cp-attachments-list" class="cp-attachments-list"></div>
+                        </div>
+
+                        <div class="cp-wiz-footer">
+                            <button class="pf-btn" onclick="cpGoPrevStep(3)">
+                                <i class="ti ti-arrow-left"></i> Back
+                            </button>
+                            <button class="pf-btn primary" onclick="cpGoNextStep(3)">
+                                Continue to Review & Submit <i class="ti ti-arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 4 PANEL: REVIEW & SUBMIT (SEPARATE TAB) -->
+            <div class="cp-step-panel" id="cp-step-panel-4">
+                <div class="pf-section">
+                    <div class="pf-section-head">
+                        <h3><i class="ti ti-clipboard-check" style="margin-right:6px;color:var(--indigo)"></i>Review &
+                            Confirm Details</h3>
+                    </div>
+                    <div class="pf-form" style="padding:22px;">
+                        <!-- Summary Card -->
+                        <div class="cp-summary-card">
+                            <div class="cp-sum-title"><i class="ti ti-checks"
+                                    style="margin-right:6px;color:var(--indigo)"></i>Ticket Submission Breakdown</div>
+                            <div class="cp-sum-grid">
+                                <div><span class="cp-sum-lbl">Customer:</span> <strong id="cp-sum-customer">-</strong>
+                                </div>
+                                <div><span class="cp-sum-lbl">Sales Person:</span> <strong
+                                        id="cp-sum-sales-person">-</strong></div>
+                                <div><span class="cp-sum-lbl">Subject:</span> <strong id="cp-sum-subject">-</strong>
+                                </div>
+                                <div><span class="cp-sum-lbl">Contact Person:</span> <strong
+                                        id="cp-sum-contact">-</strong></div>
+                                <div><span class="cp-sum-lbl">Department:</span> <strong id="cp-sum-dept">-</strong>
+                                </div>
+                                <div><span class="cp-sum-lbl">Active Asset:</span> <strong id="cp-sum-sub">-</strong>
+                                </div>
+                                <div><span class="cp-sum-lbl">Category:</span> <strong id="cp-sum-category">-</strong>
+                                </div>
+                                <div><span class="cp-sum-lbl">Priority:</span> <strong id="cp-sum-priority">-</strong>
+                                </div>
+                                <div><span class="cp-sum-lbl">Attachments:</span> <strong id="cp-sum-files">0
+                                        files</strong></div>
+                            </div>
+                        </div>
+
+                        <div class="cp-wiz-footer">
+                            <button class="pf-btn" onclick="cpGoPrevStep(4)">
+                                <i class="ti ti-arrow-left"></i> Back to Details
+                            </button>
+                            <button class="pf-btn primary" id="cp-submit-btn" onclick="submitTicket()">
+                                <i class="ti ti-send"></i> Submit Ticket Now
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SCOPE OF WORK VIEW-ONLY MODAL -->
+        <div class="cp-modal-backdrop" id="sd-scope-modal" style="display:none;">
+            <div class="cp-modal-dialog" style="max-width:700px;">
+                <div class="cp-modal-header">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <div class="sd-scope-modal-icon">
+                            <i class="ti ti-briefcase"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin:0; font-size:16px; font-weight:700; color:var(--ink);">Scope of Work</h3>
+                            <div id="sd-scope-modal-subtitle"
+                                style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Ticket scope details
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="cp-modal-close" onclick="closePortalScopeModal()">
+                        <i class="ti ti-x"></i>
+                    </button>
+                </div>
+                <div class="cp-modal-body">
+                    <!-- Content when data exists -->
+                    <div id="sd-scope-modal-content" class="sd-scope-modal-content pf-detail-text"
+                        style="display:none;"></div>
+                    <!-- Empty state -->
+                    <div id="sd-scope-modal-empty" class="sd-scope-modal-empty" style="display:none;">
+                        <i class="ti ti-file-off sd-scope-empty-big-icon"></i>
+                        <div class="sd-scope-empty-title">No Scope of Work Defined</div>
+                        <div class="sd-scope-empty-subtitle">This ticket does not have any scope of work content
+                            defined yet.</div>
+                    </div>
+                </div>
+                <div
+                    style="padding:14px 24px; border-top:1px solid var(--line); display:flex; justify-content:flex-end;">
+                    <button type="button" class="pf-btn secondary sm" onclick="closePortalScopeModal()">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- DEPARTMENT MODAL -->
+        <div class="cp-modal-backdrop" id="cp-dept-modal">
+            <div class="cp-modal-dialog">
+                <div class="cp-modal-header">
+                    <h3>Select Department</h3>
+                    <button type="button" class="cp-modal-close" onclick="cpCloseDeptModal()"><i
+                            class="ti ti-x"></i></button>
+                </div>
+                <div class="cp-modal-body">
+                    <div class="cp-modal-tiles-grid" id="cp-dept-modal-grid">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ACTIVE SUBSCRIPTION / ASSET MODAL -->
+        <div class="cp-modal-backdrop" id="cp-sub-modal">
+            <div class="cp-modal-dialog">
+                <div class="cp-modal-header">
+                    <h3>Select Active Subscription / Asset</h3>
+                    <button type="button" class="cp-modal-close" onclick="cpCloseSubModal()"><i
+                            class="ti ti-x"></i></button>
+                </div>
+                <div class="cp-modal-body">
+                    <div class="cp-modal-search-box">
+                        <i class="ti ti-search"></i>
+                        <input type="text" placeholder="Search by product name, license ID..."
+                            oninput="cpFilterSubscriptions(this.value)">
+                    </div>
+                    <div class="cp-sub-modal-list" id="cp-sub-modal-list">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY / QUERY TYPE MODAL -->
+        <div class="cp-modal-backdrop" id="cp-query-modal">
+            <div class="cp-modal-dialog">
+                <div class="cp-modal-header">
+                    <h3>Select Category / Query Type</h3>
+                    <button type="button" class="cp-modal-close" onclick="cpCloseQueryModal()"><i
+                            class="ti ti-x"></i></button>
+                </div>
+                <div class="cp-modal-body">
+                    <div class="cp-modal-tiles-grid" id="cp-query-modal-grid">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SUPPORT TICKET CONTACT SELECTION MODAL WITH TPOC SELECTION -->
+        <div class="cp-modal-backdrop" id="cp-contact-modal"
+            style="display:none; align-items:center; justify-content:center;">
+            <div class="cp-modal-dialog">
+                <div class="cp-modal-header">
+                    <h3>Select Contact Person(s)</h3>
+                    <button type="button" class="cp-modal-close" onclick="cpCloseContactModal()"><i
+                            class="ti ti-x"></i></button>
+                </div>
+                <div class="cp-modal-tabs">
+                    <button type="button" class="cp-modal-tab active" id="cp-ctab-existing"
+                        onclick="cpSwitchContactTab('existing')">
+                        <i class="ti ti-users"></i> Existing Contacts
+                    </button>
+                    <button type="button" class="cp-modal-tab" id="cp-ctab-manual"
+                        onclick="cpSwitchContactTab('manual')">
+                        <i class="ti ti-user-plus"></i> Add New Contact
+                    </button>
+                </div>
+                <div class="cp-modal-body">
+                    <!-- TAB 1: EXISTING CONTACTS WITH TPOC SELECTION -->
+                    <div class="cp-modal-pane active" id="cp-cpane-existing">
+                        <div class="cp-contacts-modal-list" id="cp-contacts-modal-list">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5-STEP CONTACT WIZARD MODAL (Matching customer_list reference) -->
+        <div class="cp-modal-backdrop" id="cust-contact-modal-overlay"
+            style="display:none; align-items:center; justify-content:center;">
+            <div class="cp-modal-dialog">
+                <div class="cp-modal-header">
+                    <h3 id="cust-contact-modal-title">New Contact</h3>
+                    <button type="button" class="cp-modal-close" onclick="cpCloseContactWizModal()"><i
+                            class="ti ti-x"></i></button>
+                </div>
+                <div class="cp-modal-body" id="cust-contact-modal-body">
+                    <!-- Wizard step bar indicator -->
+                    <div class="cust-wiz-steps-bar"
+                        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid var(--line, #e2e8f0); padding-bottom: 15px;">
+                        <div class="cm-wiz-step-item active" data-step="1"
+                            style="display: flex; flex-direction: column; align-items: center; flex: 1;">
+                            <div class="step-circle"
+                                style="width: 26px; height: 26px; border-radius: 50%; background: var(--indigo, #4f46e5); color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 2px solid var(--indigo, #4f46e5); transition: all 0.3s ease;">
+                                1</div>
+                            <span
+                                style="font-size: 11px; margin-top: 4px; font-weight: 600; color: var(--ink, #0f172a);">Name</span>
+                        </div>
+                        <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+                        <div class="cm-wiz-step-item" data-step="2"
+                            style="display: flex; flex-direction: column; align-items: center; flex: 1;">
+                            <div class="step-circle"
+                                style="width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2, #f8fafc); color: var(--ink-soft, #64748b); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 2px solid var(--line, #cbd5e1); transition: all 0.3s ease;">
+                                2</div>
+                            <span
+                                style="font-size: 11px; margin-top: 4px; font-weight: 500; color: var(--ink-soft, #64748b);">Email</span>
+                        </div>
+                        <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+                        <div class="cm-wiz-step-item" data-step="3"
+                            style="display: flex; flex-direction: column; align-items: center; flex: 1;">
+                            <div class="step-circle"
+                                style="width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2, #f8fafc); color: var(--ink-soft, #64748b); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 2px solid var(--line, #cbd5e1); transition: all 0.3s ease;">
+                                3</div>
+                            <span
+                                style="font-size: 11px; margin-top: 4px; font-weight: 500; color: var(--ink-soft, #64748b);">Phone</span>
+                        </div>
+                        <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+                        <div class="cm-wiz-step-item" data-step="4"
+                            style="display: flex; flex-direction: column; align-items: center; flex: 1;">
+                            <div class="step-circle"
+                                style="width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2, #f8fafc); color: var(--ink-soft, #64748b); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 2px solid var(--line, #cbd5e1); transition: all 0.3s ease;">
+                                4</div>
+                            <span
+                                style="font-size: 11px; margin-top: 4px; font-weight: 500; color: var(--ink-soft, #64748b);">Details</span>
+                        </div>
+                        <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+                        <div class="cm-wiz-step-item" data-step="5"
+                            style="display: flex; flex-direction: column; align-items: center; flex: 1;">
+                            <div class="step-circle"
+                                style="width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2, #f8fafc); color: var(--ink-soft, #64748b); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 2px solid var(--line, #cbd5e1); transition: all 0.3s ease;">
+                                5</div>
+                            <span
+                                style="font-size: 11px; margin-top: 4px; font-weight: 500; color: var(--ink-soft, #64748b);">Review</span>
+                        </div>
+                    </div>
+
+                    <!-- Step 1 Panel: Name -->
+                    <div class="cm-wiz-panel" data-panel="1">
+                        <div class="pf-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                            <div class="pf-field">
+                                <label>First Name <span style="color:var(--crimson, #ef4444)">*</span></label>
+                                <input id="cm-first-name" placeholder="First name" />
+                            </div>
+                            <div class="pf-field">
+                                <label>Last Name</label>
+                                <input id="cm-last-name" placeholder="Last name" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2 Panel: Email -->
+                    <div class="cm-wiz-panel" data-panel="2" style="display: none;">
+                        <div class="pf-field">
+                            <label
+                                style="font-weight: 700; color: var(--ink); font-size: 13.5px; margin-bottom: 6px;">Add
+                                New Email</label>
+                            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+                                <input id="cm-new-email" placeholder="Email Address"
+                                    style="flex: 1; height: 38px; border: 1px solid var(--line, #cbd5e1); border-radius: 8px; padding: 0 12px; font-size: 13px;" />
+                                <label
+                                    style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; cursor: pointer; margin: 0; user-select: none;">
+                                    <input type="checkbox" id="cm-new-email-primary"
+                                        style="width: 15px; height: 15px; accent-color: var(--indigo, #4f46e5);" />
+                                    Primary
+                                </label>
+                                <button type="button" class="pf-btn" id="cm-new-email-add-btn" onclick="cpAddWizEmail()"
+                                    style="height: 38px; padding: 0 14px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;"><i
+                                        class="ti ti-plus"></i> Add</button>
+                            </div>
+                            <div
+                                style="font-weight: 700; color: var(--ink); font-size: 13px; margin-bottom: 6px; border-top: 1px solid var(--line, #e2e8f0); padding-top: 10px;">
+                                Added Emails</div>
+                            <div id="cm-emails-list"
+                                style="max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 3 Panel: Phone -->
+                    <div class="cm-wiz-panel" data-panel="3" style="display: none;">
+                        <div class="pf-field">
+                            <label
+                                style="font-weight: 700; color: var(--ink); font-size: 13.5px; margin-bottom: 6px;">Add
+                                New Phone Number</label>
+                            <div
+                                style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--line, #cbd5e1); border-radius: 8px; background: var(--surface-2, #f8fafc);">
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <input id="cm-new-phone" placeholder="Phone Number"
+                                        style="flex: 1; height: 38px; border: 1px solid var(--line, #cbd5e1); border-radius: 8px; padding: 0 12px; font-size: 13px; background: white;" />
+                                    <button type="button" class="pf-btn" id="cm-new-phone-add-btn"
+                                        onclick="cpAddWizPhone()"
+                                        style="height: 38px; padding: 0 14px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;"><i
+                                            class="ti ti-plus"></i> Add</button>
+                                </div>
+                                <div style="display: flex; gap: 16px; margin-top: 2px;">
+                                    <label
+                                        style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; cursor: pointer; margin: 0; user-select: none;">
+                                        <input type="checkbox" id="cm-new-phone-primary-phone"
+                                            style="width: 15px; height: 15px; accent-color: var(--indigo, #4f46e5);" />
+                                        Primary Phone
+                                    </label>
+                                    <label
+                                        style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; cursor: pointer; margin: 0; user-select: none;">
+                                        <input type="checkbox" id="cm-new-phone-primary-mobile"
+                                            style="width: 15px; height: 15px; accent-color: var(--indigo, #4f46e5);" />
+                                        Primary Mobile
+                                    </label>
+                                </div>
+                            </div>
+                            <div
+                                style="font-weight: 700; color: var(--ink); font-size: 13px; margin-bottom: 6px; border-top: 1px solid var(--line, #e2e8f0); padding-top: 10px;">
+                                Added Phone Numbers</div>
+                            <div id="cm-phones-list"
+                                style="max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 4 Panel: Details -->
+                    <div class="cm-wiz-panel" data-panel="4" style="display: none;">
+                        <div class="pf-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                            <div class="pf-field">
+                                <label>Address</label>
+                                <select id="cm-address">
+                                    <option value="">-- Select Address --</option>
+                                </select>
+                                <input type="hidden" id="cm-company-name" />
+                            </div>
+                            <div class="pf-field">
+                                <label>Status</label>
+                                <select id="cm-status">
+                                    <option value="Open">Open</option>
+                                    <option value="Passive">Passive</option>
+                                    <option value="Do Not Contact">Do Not Contact</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="pf-field-row"
+                            style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top: 8px;">
+                            <div class="pf-field">
+                                <label>Designation <span style="color:var(--crimson, #ef4444)">*</span></label>
+                                <select id="cm-designation-select" onchange="cpHandleDesignationChange(this)">
+                                    <option value="">-- Select Designation --</option>
+                                    <option value="CEO">CEO</option>
+                                    <option value="CTO">CTO</option>
+                                    <option value="CIO">CIO</option>
+                                    <option value="IT Director">IT Director</option>
+                                    <option value="IT Head">IT Head</option>
+                                    <option value="IT Manager">IT Manager</option>
+                                    <option value="IT Support">IT Support</option>
+                                    <option value="Network Engineer">Network Engineer</option>
+                                    <option value="System Administrator">System Administrator</option>
+                                    <option value="Purchase Manager">Purchase Manager</option>
+                                    <option value="Account Manager">Account Manager</option>
+                                    <option value="Custom">Custom...</option>
+                                </select>
+                                <input id="cm-designation-custom" placeholder="Enter Custom Designation"
+                                    style="margin-top: 6px; display: none;" />
+                                <input type="hidden" id="cm-designation" />
+                            </div>
+                            <div class="pf-field">
+                                <label>Department <span style="color:var(--crimson, #ef4444)">*</span></label>
+                                <select id="cm-department-select" onchange="cpHandleDepartmentChange(this)">
+                                    <option value="">-- Select Department --</option>
+                                    <option value="Management">Management</option>
+                                    <option value="IT">IT</option>
+                                    <option value="Networking">Networking</option>
+                                    <option value="Security">Security</option>
+                                    <option value="Purchasing">Purchasing</option>
+                                    <option value="Finance">Finance</option>
+                                    <option value="Operations">Operations</option>
+                                    <option value="Sales">Sales</option>
+                                    <option value="Human Resources">Human Resources</option>
+                                    <option value="Support">Support</option>
+                                    <option value="Custom">Custom...</option>
+                                </select>
+                                <input id="cm-department-custom" placeholder="Enter Custom Department"
+                                    style="margin-top: 6px; display: none;" />
+                                <input type="hidden" id="cm-department" />
+                            </div>
+                        </div>
+                        <div class="pf-field-row"
+                            style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top: 8px;">
+                            <div class="pf-field">
+                                <label>Gender <span style="color:var(--crimson, #ef4444)">*</span></label>
+                                <select id="cm-gender">
+                                    <option value="">-- Select --</option>
+                                    <option value="Male">Male</option>
+                                    <option value="Female">Female</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div class="pf-field">
+                                <label>Date of Birth</label>
+                                <input id="cm-dob" type="date" />
+                            </div>
+                        </div>
+                        <div class="pf-field-row"
+                            style="display:grid;grid-template-columns:1fr;gap:12px;margin-top: 8px;">
+                            <div class="pf-field">
+                                <label>LinkedIn Profile</label>
+                                <input id="cm-linkedin" placeholder="https://linkedin.com/in/username" />
+                            </div>
+                        </div>
+                        <div class="pf-field" style="margin-top: 12px; display: flex; gap: 20px; align-items: center;">
+                            <label
+                                style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); font-weight: 500; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="cm-is-primary"
+                                    style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--indigo, #4f46e5);" />
+                                Set as Primary Contact
+                            </label>
+
+                        </div>
+                    </div>
+
+                    <!-- Step 5 Panel: Review -->
+                    <div class="cm-wiz-panel" data-panel="5" style="display: none;">
+                        <div id="cm-review-summary" style="padding: 4px 0;"></div>
+                    </div>
+
+                    <input type="hidden" id="cm-contact-id" value="" />
+                </div>
+                <div class="cp-modal-footer"
+                    style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-top: 1px solid var(--line, #e2e8f0);">
+                    <button type="button" class="pf-btn" onclick="cpCloseContactWizModal()">Cancel</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" class="pf-btn" id="cust-contact-modal-back" style="display: none;"
+                            onclick="cpWizPrevStep()">Back</button>
+                        <button type="button" class="pf-btn primary" id="cust-contact-modal-next"
+                            onclick="cpWizNextStep()">Next</button>
+                        <button type="button" class="pf-btn primary" id="cust-contact-modal-save" style="display: none;"
+                            onclick="cpSaveContactWiz()"><i class="ti ti-check"></i> Save Contact</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== CONTACT DETAIL PAGE ===== -->
+        <div class="pf-page" id="page-contact-detail">
+            <button class="pf-back-btn" onclick="pfGoByName('contacts')">
+                <i class="ti ti-arrow-left"></i> Back to Contacts
+            </button>
+            <div class="pf-top">
+                <div class="pf-detail-top-left">
+                    <h1 class="pf-h1" id="cd-fullname">Contact Name</h1>
+                    <div class="pf-sub" id="cd-designation-sub">Designation</div>
+                </div>
+                <div class="pf-detail-status-row">
+                    <span class="pf-pill paid" id="cd-primary-pill" style="display:none;">Primary Contact</span>
+                </div>
+            </div>
+
+            <div class="pf-detail-hero">
+                <div class="pf-detail-hero-card indigo">
+                    <div class="pf-dhc-icon"><i class="ti ti-user"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Full Name</div>
+                        <div class="pf-dhc-val" id="cd-name-hero">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card purple">
+                    <div class="pf-dhc-icon"><i class="ti ti-mail"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Email</div>
+                        <div class="pf-dhc-val" id="cd-email-hero">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card green">
+                    <div class="pf-dhc-icon"><i class="ti ti-phone"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Phone / Mobile</div>
+                        <div class="pf-dhc-val" id="cd-phone-hero">-</div>
+                    </div>
+                </div>
+                <div class="pf-detail-hero-card amber">
+                    <div class="pf-dhc-icon"><i class="ti ti-briefcase"></i></div>
+                    <div class="pf-dhc-body">
+                        <div class="pf-dhc-label">Role / Designation</div>
+                        <div class="pf-dhc-val" id="cd-designation-hero">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pf-detail-grid">
+                <div class="pf-detail-col">
+                    <div class="pf-section">
+                        <div class="pf-section-head">
+                            <h3><i class="ti ti-user-check" style="margin-right:6px;color:var(--indigo)"></i>Contact
+                                Details</h3>
+                        </div>
+                        <div class="pf-dg pf-dg-inner">
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">First Name</div>
+                                <div class="pf-dg-val" id="cd-first-name">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Last Name</div>
+                                <div class="pf-dg-val" id="cd-last-name">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Email Address</div>
+                                <div class="pf-dg-val" id="cd-email">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Mobile Number</div>
+                                <div class="pf-dg-val" id="cd-mobile">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Phone Number</div>
+                                <div class="pf-dg-val" id="cd-phone">-</div>
+                            </div>
+                            <div class="pf-dg-item">
+                                <div class="pf-dg-label">Designation</div>
+                                <div class="pf-dg-val" id="cd-designation">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== INVOICES ===== -->
+        <div class="pf-page" id="page-invoices">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Invoices</h1>
+                    <div class="pf-sub" id="invoices-sub-title">0 invoices on this account</div>
+                </div>
+            </div>
+            <div class="pf-toolbar">
+                <div class="pf-search"><i class="ti ti-search"></i><input id="invoice-search-input"
+                        placeholder="Search by invoice number…" oninput="filterInvoices()">
+                </div>
+                <div class="pf-filterchip"><i class="ti ti-filter"></i> Status: <select id="invoice-status-filter"
+                        onchange="filterInvoices()">
+                        <option value="All">All</option>
+                    </select></div>
+            </div>
+            <div class="pf-section" id="invoices-list">
+            </div>
+            <div class="pf-list-footer">
+                <div class="pf-page-size-selector">
+                    <span>Show:</span>
+                    <select id="invoice-page-size" onchange="changePageSize('invoices')">
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div class="pf-record-count" id="invoice-record-count">Showing 0 of 0</div>
+                <button class="pf-btn-more" id="invoice-load-more" onclick="loadMoreRecords('invoices')">Load
+                    More</button>
+            </div>
+        </div>
+
+        <!-- ===== ORDERS ===== -->
+        <div class="pf-page" id="page-orders">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Orders</h1>
+                    <div class="pf-sub" id="orders-sub-title">0 orders on this account</div>
+                </div>
+            </div>
+            <div class="pf-toolbar">
+                <div class="pf-search"><i class="ti ti-search"></i><input id="order-search-input"
+                        placeholder="Search by order number…" oninput="filterOrders()">
+                </div>
+                <div class="pf-filterchip"><i class="ti ti-filter"></i> Status: <select id="order-status-filter"
+                        onchange="filterOrders()">
+                        <option value="All">All</option>
+                    </select></div>
+            </div>
+            <div id="orders-list">
+            </div>
+            <div class="pf-list-footer">
+                <div class="pf-page-size-selector">
+                    <span>Show:</span>
+                    <select id="order-page-size" onchange="changePageSize('orders')">
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div class="pf-record-count" id="order-record-count">Showing 0 of 0</div>
+                <button class="pf-btn-more" id="order-load-more" onclick="loadMoreRecords('orders')">Load More</button>
+            </div>
+        </div>
+
+        <!-- ===== SUPPORT ===== -->
+        <div class="pf-page" id="page-support">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Support</h1>
+                    <div class="pf-sub" id="support-sub-title">0 tickets on this account</div>
+                </div>
+                <button class="pf-btn primary sm" onclick="openNewTicketPage()"><i class="ti ti-plus"></i> Raise New
+                    Ticket</button>
+            </div>
+            <div class="pf-toolbar">
+                <div class="pf-search"><i class="ti ti-search"></i><input id="ticket-search-input"
+                        placeholder="Search by ticket ID, subject…" oninput="filterTickets()">
+                </div>
+                <div class="pf-filterchip"><i class="ti ti-filter"></i> Status: <select id="ticket-status-filter"
+                        onchange="filterTickets()">
+                        <option value="All">All</option>
+                    </select></div>
+            </div>
+            <div class="pf-section">
+                <div class="pf-section-head">
+                    <h3>Support tickets</h3>
+                </div>
+                <div id="support-tickets-list">
+                </div>
+                <div class="pf-list-footer"
+                    style="margin-top: 0; border-top: 1px solid var(--line); border-left: none; border-right: none; border-bottom: none; border-radius: 0 0 12px 12px;">
+                    <div class="pf-page-size-selector">
+                        <span>Show:</span>
+                        <select id="support-page-size" onchange="changePageSize('support')">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="pf-record-count" id="support-record-count">Showing 0 of 0</div>
+                    <button class="pf-btn-more" id="support-load-more" onclick="loadMoreRecords('support')">Load
+                        More</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== CONTACTS ===== -->
+        <div class="pf-page" id="page-contacts">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Contacts</h1>
+                    <div class="pf-sub" id="contacts-sub-title">0 people on this account</div>
+                </div>
+                <button type="button" class="pf-btn primary" onclick="cpOpenAddContactModalStandalone()">
+                    <i class="ti ti-user-plus"></i> Add New Contact
+                </button>
+            </div>
+            <div class="pf-section" id="contacts-list">
+            </div>
+            <div class="pf-list-footer">
+                <div class="pf-page-size-selector">
+                    <span>Show:</span>
+                    <select id="contact-page-size" onchange="changePageSize('contacts')">
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div class="pf-record-count" id="contact-record-count">Showing 0 of 0</div>
+                <button class="pf-btn-more" id="contact-load-more" onclick="loadMoreRecords('contacts')">Load
+                    More</button>
+            </div>
+        </div>
+
+        <!-- ===== SETTINGS ===== -->
+        <div class="pf-page" id="page-settings">
+            <div class="pf-top">
+                <div>
+                    <h1 class="pf-h1">Account settings</h1>
+                    <div class="pf-sub">Manage your company profile and billing address locations</div>
+                </div>
+            </div>
+
+            <!-- Company Profile Section -->
+            <div class="pf-company-card-v2">
+                <div class="pf-company-card-left">
+                    <div class="pf-company-icon-circle-wrapper" onclick="triggerCompanyLogoUpload()"
+                        title="Click to upload/change logo">
+                        <div class="pf-company-icon-circle" id="pf-company-icon-circle">
+                            <i class="ti ti-building"></i>
+                        </div>
+                        <div class="pf-company-logo-overlay">
+                            <i class="ti ti-camera"></i>
+                        </div>
+                        <input type="file" id="pf-company-logo-input" accept="image/*" style="display:none;"
+                            onchange="uploadCompanyLogo(this)">
+                    </div>
+                    <div class="pf-company-info-block">
+                        <!--<h3 class="pf-company-card-title">Company details</h3>-->
+                        <div class="pf-company-fields-row">
+                            <div class="pf-company-field-item">
+                                <!-- <span class="pf-company-label">Legal name <small class="pf-readonly-text">(Read-only)</small></span> -->
+                                <div class="pf-company-val" id="settings-legal-name-val">Loading...</div>
+                            </div>
+                            <div class="pf-company-v-divider"></div>
+                            <div class="pf-company-field-item">
+                                <span class="pf-company-label">Primary GSTIN</span>
+                                <div class="pf-company-val gstin" id="settings-gstin-val-wrapper">
+                                    <span id="settings-gstin-val">Loading...</span>
+                                </div>
+                                <div id="settings-gstin-edit-wrapper"
+                                    style="display:none; align-items:center; gap:6px; margin-top:4px;">
+                                    <input id="settings-gstin-inline-input"
+                                        style="font-weight:700; font-size:13.5px; text-transform:uppercase; width:180px; padding:4px 8px; border:1.5px solid #7c3aed; border-radius:6px; background:#fff;"
+                                        placeholder="15-digit GSTIN"
+                                        onkeydown="if(event.key==='Enter') saveInlineCompanyGstin()">
+                                    <button class="pf-btn primary sm" onclick="saveInlineCompanyGstin()"
+                                        style="padding:4px 10px; font-size:12px;"><i class="ti ti-check"></i></button>
+                                    <button class="pf-btn sm" onclick="toggleInlineCompanyGstin(false)"
+                                        style="padding:4px 10px; font-size:12px;"><i class="ti ti-x"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button class="pf-btn-purple-outline" id="btn-edit-company-details"
+                    onclick="toggleInlineCompanyGstin(true)">
+                    <i class="ti ti-edit"></i> Edit
+                </button>
+            </div>
+
+            <!-- Addresses Section -->
+            <div class="pf-addresses-sec" style="margin-top:28px;">
+                <div class="pf-addresses-sec-header">
+                    <div>
+                        <h3 class="pf-addresses-sec-title">Addresses</h3>
+                        <div class="pf-addresses-sec-sub">Manage your billing and shipping addresses</div>
+                    </div>
+                    <button class="pf-btn-purple-outline" onclick="openAddressEditModal()">
+                        <i class="ti ti-plus"></i> Add new address
+                    </button>
+                </div>
+                <div id="settings-addresses-list">
+                    <!-- Address Cards Rendered Dynamically -->
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- ===== ADDRESS WIZARD MODAL ===== -->
+<div class="pf-modal-overlay" id="pf-address-modal-overlay" style="display: none;"
+    onclick="if(event.target===this) closeAddressEditModal()">
+    <div class="pf-modal-box" style="text-align: left; padding: 24px; display: flex; flex-direction: column;">
+        <button class="pf-modal-close-btn" onclick="closeAddressEditModal()">&times;</button>
+
+        <!-- Header -->
+        <div
+            style="margin-bottom: 14px; border-bottom: 1px solid var(--line, #e2e8f0); padding-bottom: 10px; flex-shrink: 0;">
+            <h3 class="pf-modal-title" style="display: flex; align-items: center; gap: 8px;">
+                <i class="ti ti-map-pin" style="color: var(--indigo);"></i> <span id="pam-modal-heading">New
+                    Address</span>
+            </h3>
+        </div>
+
+        <!-- Wizard Steps Progress Bar -->
+        <div class="pf-wiz-steps-bar"
+            style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line, #e2e8f0); flex-shrink: 0;">
+            <div class="pf-wiz-step-item active" data-step="1" onclick="goToAddressWizardStep(1)"
+                style="display: flex; flex-direction: column; align-items: center; flex: 1; cursor: pointer;">
+                <div class="pf-wiz-circle" id="pam-step-circle-1"
+                    style="width: 26px; height: 26px; border-radius: 50%; background: var(--indigo, #4f46e5); color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; transition: all 0.25s ease;">
+                    1</div>
+                <span
+                    style="font-size: 10.5px; margin-top: 4px; font-weight: 600; color: var(--ink, #0f172a);">Type</span>
+            </div>
+            <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+            <div class="pf-wiz-step-item" data-step="2" onclick="goToAddressWizardStep(2)"
+                style="display: flex; flex-direction: column; align-items: center; flex: 1; cursor: pointer;">
+                <div class="pf-wiz-circle" id="pam-step-circle-2"
+                    style="width: 26px; height: 26px; border-radius: 50%; background: #f1f5f9; color: #64748b; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 1px solid #cbd5e1; transition: all 0.25s ease;">
+                    2</div>
+                <span style="font-size: 10.5px; margin-top: 4px; font-weight: 500; color: #64748b;">Location</span>
+            </div>
+            <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+            <div class="pf-wiz-step-item" data-step="3" onclick="goToAddressWizardStep(3)"
+                style="display: flex; flex-direction: column; align-items: center; flex: 1; cursor: pointer;">
+                <div class="pf-wiz-circle" id="pam-step-circle-3"
+                    style="width: 26px; height: 26px; border-radius: 50%; background: #f1f5f9; color: #64748b; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 1px solid #cbd5e1; transition: all 0.25s ease;">
+                    3</div>
+                <span style="font-size: 10.5px; margin-top: 4px; font-weight: 500; color: #64748b;">Tax & Prefs</span>
+            </div>
+            <div style="flex: 1; height: 2px; background: var(--line, #e2e8f0); margin-bottom: 14px;"></div>
+            <div class="pf-wiz-step-item" data-step="4" onclick="goToAddressWizardStep(4)"
+                style="display: flex; flex-direction: column; align-items: center; flex: 1; cursor: pointer;">
+                <div class="pf-wiz-circle" id="pam-step-circle-4"
+                    style="width: 26px; height: 26px; border-radius: 50%; background: #f1f5f9; color: #64748b; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 1px solid #cbd5e1; transition: all 0.25s ease;">
+                    4</div>
+                <span style="font-size: 10.5px; margin-top: 4px; font-weight: 500; color: #64748b;">Review</span>
+            </div>
+        </div>
+
+        <input type="hidden" id="pam-docname" value="">
+
+        <!-- Modal Body (Wizard Step Panels) -->
+        <div class="pf-form pf-modal-scrollable-body" style="display: flex; flex-direction: column; gap: 12px;">
+
+            <!-- Step 1: Type & Title -->
+            <div class="pam-wiz-panel" id="pam-panel-1">
+                <div class="pf-field" style="margin-bottom: 12px;">
+                    <label>Address Title <span style="color:#ef4444;">*</span></label>
+                    <input id="pam-title" placeholder="e.g. Head Office / Billing Address">
+                </div>
+                <div class="pf-field">
+                    <label>Address Type <span style="color:#ef4444;">*</span></label>
+                    <select id="pam-type">
+                        <option value="Billing">Billing</option>
+                        <option value="Shipping">Shipping</option>
+                        <option value="Office">Office</option>
+                        <option value="Plant">Plant</option>
+                        <option value="Warehouse">Warehouse</option>
+                        <option value="Personal">Personal</option>
+                        <option value="Postal">Postal</option>
+                        <option value="Others">Others</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Step 2: Location & Address Lines -->
+            <div class="pam-wiz-panel" id="pam-panel-2" style="display: none;">
+                <div class="pf-field">
+                    <label>Address Line 1 <span style="color:#ef4444;">*</span></label>
+                    <input id="pam-line1" placeholder="Street address, P.O. Box, Company location">
+                </div>
+                <div class="pf-field">
+                    <label>Address Line 2</label>
+                    <input id="pam-line2" placeholder="Suite, unit, building, floor, landmark">
+                </div>
+                <div class="pf-formrow">
+                    <div class="pf-field">
+                        <label>City <span style="color:#ef4444;">*</span></label>
+                        <input id="pam-city" placeholder="City">
+                    </div>
+                    <div class="pf-field">
+                        <label>State</label>
+                        <input id="pam-state" placeholder="State / Province">
+                    </div>
+                </div>
+                <div class="pf-formrow">
+                    <div class="pf-field">
+                        <label>Country <span style="color:#ef4444;">*</span></label>
+                        <input id="pam-country" value="India" placeholder="Country">
+                    </div>
+                    <div class="pf-field">
+                        <label>Pincode / Zip Code</label>
+                        <input id="pam-pincode" placeholder="Pincode">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Tax Details & Preferences -->
+            <div class="pam-wiz-panel" id="pam-panel-3" style="display: none;">
+                <div class="pf-formrow">
+                    <div class="pf-field">
+                        <label>GSTIN</label>
+                        <input id="pam-gstin" placeholder="e.g. 36AACCA1234B1Z5">
+                    </div>
+                    <div class="pf-field">
+                        <label>GST Category</label>
+                        <select id="pam-gst-category">
+                            <option value="">-- Select GST Category --</option>
+                            <option value="Registered Regular">Registered Regular</option>
+                            <option value="Registered Composition">Registered Composition</option>
+                            <option value="Unregistered">Unregistered</option>
+                            <option value="SEZ">SEZ</option>
+                            <option value="Overseas">Overseas</option>
+                            <option value="Deemed Export">Deemed Export</option>
+                            <option value="UIN Holders">UIN Holders</option>
+                            <option value="Tax Deductor">Tax Deductor</option>
+                        </select>
+                    </div>
+                </div>
+                <div
+                    style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--line, #e2e8f0);">
+                    <label
+                        style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 500;">
+                        <input type="checkbox" id="pam-is-primary-billing" style="width: 16px; height: 16px;">
+                        Preferred Billing Address
+                    </label>
+                    <label
+                        style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 500;">
+                        <input type="checkbox" id="pam-is-primary-shipping" style="width: 16px; height: 16px;">
+                        Preferred Shipping Address
+                    </label>
+                </div>
+            </div>
+
+            <!-- Step 4: Review Summary -->
+            <div class="pam-wiz-panel" id="pam-panel-4" style="display: none;">
+                <div id="pam-review-summary"
+                    style="padding: 16px; background: #f8fafc; border: 1px solid var(--line, #e2e8f0); border-radius: 10px; font-size: 13px; line-height: 1.6;">
+                    <!-- Dynamically populated review summary -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Footer Actions -->
+        <div class="pf-modal-footer"
+            style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #e2e8f0); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+            <button class="pf-btn" onclick="closeAddressEditModal()">Cancel</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="pf-btn" id="pam-back-btn" onclick="prevAddressWizardStep()"
+                    style="display: none;">Back</button>
+                <button class="pf-btn primary" id="pam-next-btn" onclick="nextAddressWizardStep()">Next <i
+                        class="ti ti-arrow-right"></i></button>
+                <button class="pf-btn primary" id="pam-save-btn" onclick="savePortalAddress()" style="display: none;"><i
+                        class="ti ti-check"></i> Save Address</button>
+            </div>
+        </div>
+
+        <script>
+            window.userEmail = "{{ user_email }}";
+        </script>
+        {% endblock %}

@@ -60,7 +60,8 @@ app_license = "mit"
 # home_page = "login"
 
 website_route_rules = [
-    {"from_route": "/customer-portal/<path:app_path>", "to_route": "customer-portal"}
+    {"from_route": "/customer-portal/<path:app_path>", "to_route": "customer-portal"},
+    {"from_route": "/customer-portal-view/<path:app_path>", "to_route": "customer-portal-view"}
 ]
 
 # website user home page (by Role)

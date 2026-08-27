@@ -1,3 +1,47 @@
+const titles = {
+    dashboard: ['Dashboard', 'Real-time overview of your security, services & spend'],
+    renewals: ['Renewals', 'Track and manage every license renewal'],
+    'renewal-detail': ['Renewal Details', ''],
+    invoices: ['Invoices', 'View, download and pay your invoices'],
+    'invoice-detail': ['Invoice Details', ''],
+    tickets: ['Support Tickets', 'Raise a ticket or check on an existing one'],
+    'ticket-detail': ['Ticket Details', ''],
+    'ticket-new': ['Raise Support Ticket', 'Submit your technical issue or service request'],
+    account: ['Profile & Settings', '']
+};
+
+let portalData = null;
+let currentTicket = null;
+let currentInvoice = null;
+
+// Page List States for filtering and pagination
+const listState = {
+    renewals: { search: '', status: 'active', limit: 10 },
+    invoices: { search: '', status: 'all', limit: 10 },
+    tickets: { search: '', status: 'all', limit: 10 }
+};
+
+// DOM Element Creator
+function cel(tag, attrs = {}, children = []) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+        if (k === 'class') el.className = v;
+        else if (k === 'style') el.style.cssText = v;
+        else if (k === 'textContent') el.textContent = v;
+        else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.substring(2).toLowerCase(), v);
+        else el.setAttribute(k, v);
+    }
+    for (const child of children) {
+        if (!child) continue;
+        if (typeof child === 'string' || typeof child === 'number') {
+            el.appendChild(document.createTextNode(String(child)));
+        } else {
+            el.appendChild(child);
+        }
+    }
+    return el;
+}
+
 function escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -7,190 +51,1442 @@ function escapeHtml(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
-if (typeof window !== 'undefined') {
-    window.escapeHtml = escapeHtml;
+
+function safeEscape(str) {
+    return escapeHtml(str);
+}
+window.safeEscape = safeEscape;
+
+function formatDate(dateStr) {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-// Mobile Sidebar Toggle
-function toggleMobileSidebar(show) {
-    const sidebar = document.querySelector('.pf-side');
-    const backdrop = document.getElementById('sidebar-backdrop');
-    if (!sidebar || !backdrop) return;
+function formatDateTime(dateStr) {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let hours = d.getHours();
+    const minutes = d.getMinutes().toString().padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} ${hours}:${minutes} ${ampm}`;
+}
+window.formatDateTime = formatDateTime;
 
-    if (show === undefined) {
-        show = !sidebar.classList.contains('open');
+function formatRelativeTime(dateStr) {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const now = new Date();
+    const diffMs = now - d;
+    if (diffMs < 0 || isNaN(diffMs)) return formatDateTime(dateStr);
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+
+    const timePart = formatDateTime(dateStr).split(' ').slice(3).join(' ');
+
+    if (diffSec < 60) return `Just now (${timePart})`;
+    if (diffMin < 60) return `${diffMin}m ago (${timePart})`;
+    if (diffHour < 24) return `${diffHour}h ago (${timePart})`;
+    if (diffDay < 7) return `${diffDay}d ago (${timePart})`;
+
+    return formatDateTime(dateStr);
+}
+window.formatRelativeTime = formatRelativeTime;
+
+function formatCurrency(amt) {
+    if (amt === null || amt === undefined || isNaN(amt)) return '₹0';
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amt);
+}
+
+// Status Display & Class Resolvers
+function getInvoiceDisplayStatus(inv) {
+    if (!inv) return 'Issued';
+    if (inv.status && inv.status.toLowerCase() === 'paid') return 'Paid';
+    if (inv.outstanding_amount === 0) return 'Paid';
+    const today = new Date();
+    if (inv.due_date && new Date(inv.due_date) < today && inv.outstanding_amount > 0) {
+        return 'Overdue';
     }
-    if (show) {
-        sidebar.classList.add('open');
-        backdrop.classList.add('on');
+    if (inv.status && inv.status.toLowerCase() === 'draft') return 'Draft';
+    if (inv.outstanding_amount > 0) return 'Unpaid';
+    return inv.status || 'Issued';
+}
+
+function getInvoiceStatusClass(status) {
+    if (!status) return 'orange';
+    status = status.toLowerCase();
+    if (status === 'paid') return 'green';
+    if (status === 'overdue') return 'red';
+    if (status === 'unpaid' || status === 'submitted') return 'orange';
+    if (status === 'draft') return 'blue';
+    return 'green';
+}
+
+function getRenewalDisplayStatus(ren) {
+    if (!ren) return 'Active';
+    const today = new Date();
+    const endDate = ren.end_date ? new Date(ren.end_date) : null;
+    const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+    if (ren.status && ren.status.toLowerCase() === 'draft') return 'Draft';
+    if (daysLeft < 0 || (ren.status && ren.status.toLowerCase() === 'expired') || (ren.status && ren.status.toLowerCase() === 'lost')) return 'Expired';
+    return ren.status || 'Active';
+}
+
+function getRenewalStatusClass(status) {
+    if (!status) return 'green';
+    status = status.toLowerCase();
+    if (status === 'active') return 'green';
+    if (status === 'draft') return 'blue';
+    if (status === 'due soon' || status === 'due') return 'orange';
+    if (status === 'expired' || status === 'lost' || status === 'cancelled') return 'red';
+    return 'green';
+}
+
+function getTicketDisplayStatus(t) {
+    if (!t) return 'Open';
+    return t.status || 'Open';
+}
+
+function getTicketStatusClass(status) {
+    if (!status) return 'green';
+    status = status.toLowerCase();
+    if (status === 'open' || status === 'assigned' || status === 'in progress' || status === 'pending') return 'orange';
+    if (status === 'closed' || status === 'resolved') return 'green';
+    if (status === 'urgent' || status === 'high') return 'red';
+    return 'orange';
+}
+
+// Clean URL Routing Utilities
+function updateUrlPath(pathSegment) {
+    let cleanPath = '/customer-portal';
+    let targetSegment = pathSegment;
+
+    if (pathSegment === 'ticket-new' || pathSegment === 'tickets/new') {
+        targetSegment = 'tickets/new';
+    } else if (pathSegment === 'dashboard') {
+        targetSegment = '';
+    }
+
+    if (targetSegment) {
+        cleanPath += '/' + targetSegment;
+    }
+
+    if (window.location.pathname + window.location.hash !== cleanPath) {
+        if (history.pushState) {
+            history.pushState(null, null, cleanPath);
+        } else {
+            window.location.hash = '#' + targetSegment;
+        }
+    }
+}
+
+function toggleMobileSidebar(e) {
+    if (e) e.stopPropagation();
+    const side = document.querySelector('.side');
+    const backdrop = document.getElementById('side-backdrop');
+    if (side) side.classList.toggle('open');
+    if (backdrop) backdrop.classList.toggle('active');
+}
+
+function closeAllModals() {
+    // Hide all custom modal backdrops (.cp-modal-backdrop)
+    document.querySelectorAll('.cp-modal-backdrop').forEach(m => {
+        m.style.display = 'none';
+    });
+
+    // Hide mobile sidebar and side backdrop
+    const side = document.querySelector('.side');
+    if (side) side.classList.remove('open');
+    const sideBackdrop = document.getElementById('side-backdrop');
+    if (sideBackdrop) {
+        sideBackdrop.classList.remove('active');
+        sideBackdrop.style.display = 'none';
+    }
+
+    // Remove dynamically injected Bootstrap / Frappe modal backdrops
+    document.querySelectorAll('.modal-backdrop').forEach(mb => mb.remove());
+
+    // Hide all Bootstrap modal dialogs
+    document.querySelectorAll('.modal').forEach(m => {
+        m.classList.remove('show');
+        m.style.display = 'none';
+    });
+
+    // Reset body scrolling
+    document.body.classList.remove('modal-open');
+    document.body.style.overflow = '';
+    document.body.style.paddingRight = '';
+}
+
+function closeMobileSidebar() {
+    const side = document.querySelector('.side');
+    const backdrop = document.getElementById('side-backdrop');
+    if (side) side.classList.remove('open');
+    if (backdrop) {
+        backdrop.classList.remove('active');
+        backdrop.style.display = 'none';
+    }
+}
+
+function go(name, el, skipHash, statusFilter) {
+    closeAllModals();
+
+    let targetEl = null;
+    let filterVal = statusFilter;
+
+    if (el) {
+        if (typeof el === 'string') {
+            filterVal = el;
+        } else if (el instanceof HTMLElement || (typeof el === 'object' && el.classList)) {
+            targetEl = el;
+        }
+    }
+
+    closeMobileSidebar();
+
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
+    const targetPage = document.getElementById('page-' + name);
+    if (targetPage) {
+        targetPage.classList.add('on');
+    }
+
+    document.querySelectorAll('.side-nav a').forEach(a => a.classList.remove('on'));
+    if (targetEl) {
+        targetEl.classList.add('on');
     } else {
-        sidebar.classList.remove('open');
-        backdrop.classList.remove('on');
+        const parent = { 'renewal-detail': 'renewals', 'invoice-detail': 'invoices', 'ticket-detail': 'tickets', 'ticket-new': 'tickets' }[name];
+        const target = parent || name;
+        const link = Array.from(document.querySelectorAll('.side-nav a')).find(a => {
+            const onclickAttr = a.getAttribute('onclick');
+            return onclickAttr && onclickAttr.includes("'" + target + "'");
+        });
+        if (link) link.classList.add('on');
+    }
+
+    const t = titles[name];
+    const topbarTitle = document.getElementById('topbar-title');
+    if (t && topbarTitle) {
+        topbarTitle.replaceChildren();
+        const h1 = document.createElement('h1');
+        h1.textContent = t[0];
+        topbarTitle.appendChild(h1);
+        if (t[1]) {
+            const sub = document.createElement('div');
+            sub.className = 'sub';
+            sub.textContent = t[1];
+            topbarTitle.appendChild(sub);
+        }
+    }
+
+    const content = document.querySelector('.content');
+    if (content) content.scrollTop = 0;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    if (filterVal && typeof filterVal === 'string' && listState[name]) {
+        listState[name].status = filterVal;
+        if (typeof getPageSize === 'function') {
+            listState[name].limit = getPageSize(name);
+        }
+    }
+
+    if (name === 'tickets') renderTickets();
+    else if (name === 'renewals') renderRenewals();
+    else if (name === 'invoices') renderInvoices();
+    else if (name === 'account') renderAccount();
+
+    if (!skipHash) {
+        updateUrlPath(name);
     }
 }
 
-function stripHtmlTags(html) {
-    if (!html || typeof html !== 'string') return '';
-    if (!/<[a-z][\s\S]*>/i.test(html)) return html;
-    try {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        return (doc.body.textContent || '').trim();
-    } catch (e) {
-        return html.replace(/<[^>]*>/g, '').trim();
+// Route Restoration Handler for Initial Load & Popstate
+function handleUrlRoute() {
+    if (!portalData) return;
+
+    let routeStr = '';
+    const currentPath = window.location.pathname;
+    if (currentPath.includes('/customer-portal')) {
+        routeStr = currentPath.replace(/^.*\/customer-portal\/?/, '');
     }
-}
 
-function setText(id, val) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = (val !== null && val !== undefined && val !== '') ? val : '-';
-}
-
-function setRichTextOrCleanHtml(elOrId, htmlContent, fallbackText = 'No description provided.', enableShowMore = false) {
-    const el = typeof elOrId === 'string' ? document.getElementById(elOrId) : elOrId;
-    if (!el) return;
-
-    if (el.nextElementSibling && el.nextElementSibling.classList.contains('pf-desc-toggle-btn')) {
-        el.nextElementSibling.remove();
+    if (!routeStr && window.location.hash) {
+        routeStr = window.location.hash.replace('#', '').trim();
     }
-    el.classList.remove('pf-item-desc-clamped', 'pf-item-desc-expanded');
 
-    if (!htmlContent || typeof htmlContent !== 'string' || !htmlContent.trim()) {
-        el.textContent = fallbackText;
+    routeStr = routeStr.replace(/^\/+|\/+$/g, '');
+
+    if (!routeStr) {
+        routeStr = 'dashboard';
+    }
+
+    // Direct match for tickets/new route variations
+    if (routeStr === 'tickets/new' || routeStr === 'ticket-new') {
+        openNewTicketModal();
         return;
     }
 
-    let raw = htmlContent.trim();
+    const parts = routeStr.split('/');
+    const mainTab = (parts[0] || '').toLowerCase();
+    const detailId = parts.length > 1 ? decodeURIComponent(parts.slice(1).join('/')) : null;
 
-    // If it doesn't contain HTML tags, render as clean text
-    if (!/<[a-z][\s\S]*>/i.test(raw)) {
-        el.textContent = raw;
+    if (mainTab === 'tickets' && (detailId === 'new' || detailId === 'ticket-new')) {
+        openNewTicketModal();
+        return;
+    }
+
+    if (mainTab === 'ticket-new') {
+        openNewTicketModal();
+        return;
+    }
+
+    const validTabs = ['dashboard', 'renewals', 'invoices', 'tickets', 'account', 'ticket-new'];
+    if (!validTabs.includes(mainTab)) {
+        go('dashboard', null, true);
+        return;
+    }
+
+    if (detailId) {
+        let found = false;
+        if (mainTab === 'renewals' && portalData.renewals) {
+            const rec = portalData.renewals.find(r => r.name === detailId);
+            if (rec) { openRenewalDetail(rec, true); found = true; }
+        } else if (mainTab === 'invoices' && portalData.invoices) {
+            const rec = portalData.invoices.find(inv => inv.name === detailId);
+            if (rec) { openInvoiceDetail(rec, true); found = true; }
+        } else if (mainTab === 'tickets') {
+            const ticketsList = (portalData && portalData.support && portalData.support.tickets) ? portalData.support.tickets : (portalData.tickets || []);
+            let rec = ticketsList.find(t => t.name === detailId);
+            if (!rec && detailId && detailId !== 'new') {
+                rec = { name: detailId, subject: 'Support Ticket', status: 'Open' };
+            }
+            if (rec) { openTicketDetail(rec, true); found = true; }
+        }
+
+        if (!found) {
+            go(mainTab, null, true);
+        }
     } else {
-        // Parse HTML safely using DOMParser
-        try {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(raw, 'text/html');
+        go(mainTab, null, true);
+    }
+}
 
-            // Remove Quill editor wrapper classes if present so styling is clean
-            doc.querySelectorAll('.ql-editor').forEach(q => {
-                q.classList.remove('ql-editor', 'read-mode');
-            });
-
-            // Strip dangerous scripts or event handlers if any
-            doc.querySelectorAll('script, style, iframe, object, embed').forEach(s => s.remove());
-            doc.querySelectorAll('*').forEach(node => {
-                for (let i = node.attributes.length - 1; i >= 0; i--) {
-                    const attr = node.attributes[i];
-                    if (attr.name.startsWith('on') || attr.value.toLowerCase().startsWith('javascript:')) {
-                        node.removeAttribute(attr.name);
-                    }
+// Fetch Portal Data from Frappe Backend
+function fetchPortalData(onComplete) {
+    if (!window.frappe || !window.frappe.call) {
+        console.log("Frappe call not available in static environment.");
+        return;
+    }
+    frappe.call({
+        method: "customer_portal.api.get_portal_data",
+        callback: function (r) {
+            if (r.message) {
+                if (r.message.error) {
+                    console.error(r.message.error);
+                    return;
                 }
-            });
+                portalData = r.message;
+                renderPortal();
+                if (!onComplete) {
+                    handleUrlRoute();
+                }
+                if (typeof onComplete === 'function') {
+                    onComplete();
+                }
+            }
+        }
+    });
+}
 
-            // Set clean, safe innerHTML from parsed body
-            el.replaceChildren();
-            Array.from(doc.body.childNodes).forEach(node => {
-                el.appendChild(node.cloneNode(true));
+function renderPortal() {
+    if (!portalData) return;
+    renderHeader();
+    renderDashboard();
+    renderRenewals();
+    renderInvoices();
+    renderTickets();
+    renderAccount();
+}
+
+function getTimeBasedGreeting() {
+    const hour = new Date().getHours();
+    if (hour >= 4 && hour < 12) {
+        return 'Good Morning,';
+    } else if (hour >= 12 && hour < 17) {
+        return 'Good Afternoon,';
+    } else if (hour >= 17 && hour < 22) {
+        return 'Good Evening,';
+    } else {
+        return 'Good Night,';
+    }
+}
+
+// Header & User Details
+function renderHeader() {
+    const info = portalData.customer_info || {};
+    const customerName = info.customer_name || 'Valued Customer';
+    const userFullName = info.user_fullname || customerName;
+    const userEmail = info.user_email || '';
+    const initial = (userFullName || customerName).charAt(0).toUpperCase() || 'C';
+
+    const sideAvatar = document.getElementById('side-user-avatar');
+    if (sideAvatar) sideAvatar.textContent = initial;
+
+    const sideName = document.getElementById('side-user-name');
+    if (sideName) {
+        sideName.textContent = userFullName;
+        sideName.title = userFullName;
+    }
+
+    const sideSub = document.getElementById('side-user-sub');
+    if (sideSub) {
+        const subText = customerName !== userFullName ? customerName : userEmail;
+        sideSub.textContent = subText;
+        sideSub.title = subText;
+    }
+
+    const topbarAvatar = document.getElementById('topbar-avatar');
+    if (topbarAvatar) {
+        topbarAvatar.textContent = initial;
+        topbarAvatar.title = userFullName;
+    }
+
+    const greetT = document.getElementById('greet-t');
+    if (greetT) greetT.textContent = getTimeBasedGreeting();
+
+    const greetName = document.getElementById('greet-name');
+    if (greetName) greetName.textContent = `${userFullName} 👋`;
+
+    // Populate dropdown header elements
+    ['topbar', 'side'].forEach(type => {
+        const uName = document.getElementById(`drop-${type}-user-name`);
+        if (uName) {
+            uName.textContent = userFullName;
+            uName.title = userFullName;
+        }
+        const cName = document.getElementById(`drop-${type}-customer-name`);
+        if (cName) {
+            const subText = customerName !== userFullName ? customerName : userEmail;
+            cName.textContent = subText;
+            cName.title = subText;
+        }
+    });
+}
+
+// Account Dropdown & Logout Handlers
+function toggleAccountDropdown(e, type = 'topbar') {
+    if (e) e.stopPropagation();
+    const dropId = type === 'side' ? 'side-account-dropdown' : 'topbar-account-dropdown';
+    const drop = document.getElementById(dropId);
+    if (!drop) return;
+    const isOpen = drop.classList.contains('show');
+    closeAccountDropdown();
+    if (!isOpen) {
+        drop.classList.add('show');
+    }
+}
+
+function closeAccountDropdown() {
+    document.querySelectorAll('.pf-account-dropdown').forEach(d => d.classList.remove('show'));
+}
+
+function handleLogout() {
+    if (window.frappe && window.frappe.call) {
+        frappe.call({
+            method: 'logout',
+            callback: function () {
+                window.location.href = '/login';
+            },
+            error: function () {
+                window.location.href = '/login';
+            }
+        });
+    } else {
+        window.location.href = '/login';
+    }
+}
+
+// Dashboard Render
+function renderDashboard() {
+    const stats = portalData.stats || {};
+    const custInfo = portalData.customer_info || {};
+
+    const nameEl = document.getElementById('db-customer-name');
+    if (nameEl && custInfo.customer_name) {
+        nameEl.textContent = custInfo.customer_name;
+    }
+
+    const nameEl2 = document.getElementById('db-user-name');
+    if (nameEl2 && (custInfo.user_fullname || custInfo.customer_name)) {
+        nameEl2.textContent = custInfo.user_fullname || custInfo.customer_name;
+        nameEl2.title = custInfo.user_fullname || custInfo.customer_name;
+    }
+
+    // Stat 1: Security Score (dynamic computation)
+    const secHealth = portalData.security_health || {};
+    const scoreValEl = document.getElementById('db-sec-score-val');
+    const scoreLblEl = document.getElementById('db-sec-score-lbl');
+    const fillEl = document.getElementById('db-sec-ring-fill');
+    if (secHealth.score !== undefined && secHealth.score !== null) {
+        const scoreVal = secHealth.score;
+        const scoreLbl = secHealth.label || (scoreVal >= 80 ? 'Excellent' : scoreVal >= 60 ? 'Good' : 'Needs Attention');
+        if (scoreValEl) scoreValEl.textContent = String(scoreVal);
+        if (scoreLblEl) scoreLblEl.textContent = scoreLbl;
+        if (fillEl) fillEl.setAttribute('stroke-dasharray', `${scoreVal}, 100`);
+    } else {
+        if (scoreValEl) scoreValEl.textContent = '-';
+        if (scoreLblEl) scoreLblEl.textContent = 'Not Available';
+        if (fillEl) fillEl.setAttribute('stroke-dasharray', `0, 100`);
+    }
+
+    // Stat 2: Open Tickets
+    const openTkts = (portalData.support?.tickets || portalData.tickets || []).filter(t => (t.status || '').toLowerCase() !== 'closed' && (t.status || '').toLowerCase() !== 'resolved');
+    const highPriorityCount = openTkts.filter(t => (t.priority || '').toLowerCase() === 'high' || (t.priority || '').toLowerCase() === 'urgent').length;
+    const openTktEl = document.getElementById('db-stat-open-tickets');
+    if (openTktEl) openTktEl.textContent = String(openTkts.length || stats.open_tickets || 0);
+    const highPriEl = document.getElementById('db-stat-high-priority');
+    if (highPriEl) highPriEl.textContent = `${highPriorityCount} High Priority`;
+
+    // Stat 3: Upcoming Renewals (within 30 days)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const renewals = portalData.renewals || [];
+    const upcomingRenewals = renewals.filter(ren => {
+        const dispStatus = getRenewalDisplayStatus(ren);
+        const endDate = ren.end_date ? new Date(ren.end_date) : null;
+        const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+        return dispStatus !== 'Expired' && dispStatus !== 'Draft' && daysLeft >= 0 && daysLeft <= 30;
+    });
+    const upRenEl = document.getElementById('db-stat-upcoming-renewals');
+    if (upRenEl) upRenEl.textContent = String(upcomingRenewals.length);
+
+    // Stat 4: Outstanding Invoices
+    const openInvoices = (portalData.invoices || []).filter(inv => {
+        const st = (getInvoiceDisplayStatus(inv) || '').toLowerCase();
+        return st === 'unpaid' || st === 'overdue' || (inv.outstanding_amount && inv.outstanding_amount > 0);
+    });
+    const totalOutstanding = openInvoices.reduce((sum, inv) => sum + (inv.outstanding_amount || inv.grand_total || 0), 0);
+    const outAmtEl = document.getElementById('db-stat-outstanding-amount');
+    if (outAmtEl) outAmtEl.textContent = formatCurrency(totalOutstanding || stats.open_invoices_amount || 0);
+    const openInvCntEl = document.getElementById('db-stat-open-invoices-count');
+    if (openInvCntEl) openInvCntEl.textContent = `${openInvoices.length || stats.open_invoices_count || 0} Invoices`;
+
+    // Stat 5: Active Products
+    const activeProducts = renewals.filter(r => (getRenewalDisplayStatus(r) || '').toLowerCase() === 'active');
+    const actProdEl = document.getElementById('db-stat-active-products');
+    if (actProdEl) actProdEl.textContent = String(activeProducts.length || stats.active_licenses || 0);
+    const catSet = new Set(activeProducts.map(r => r.category || r.item_group || r.product_category || 'General'));
+    const actCatEl = document.getElementById('db-stat-active-categories');
+    if (actCatEl) actCatEl.textContent = `Across ${catSet.size} ${catSet.size === 1 ? 'Category' : 'Categories'}`;
+
+    // Render Subsections
+    renderServiceOverviewChart();
+    renderRenewalsDueSoonList();
+    renderRecentTicketsList();
+    renderOutstandingInvoicesList();
+    renderActiveProductsSummary();
+}
+
+function renderServiceOverviewChart() {
+    const wrap = document.getElementById('db-service-chart-wrap');
+    if (!wrap) return;
+
+    if (!wrap.dataset.resizeObserved && window.ResizeObserver) {
+        wrap.dataset.resizeObserved = 'true';
+        let resizeTimer = null;
+        const ro = new ResizeObserver(() => {
+            if (resizeTimer) cancelAnimationFrame(resizeTimer);
+            resizeTimer = requestAnimationFrame(() => {
+                renderServiceOverviewChart();
             });
-        } catch (e) {
-            el.textContent = raw;
+        });
+        ro.observe(wrap);
+    }
+
+    // Generate dynamic month labels for past N months
+    const rangeSelect = document.getElementById('db-chart-range');
+    const numMonths = rangeSelect && rangeSelect.value === '3m' ? 3 : (rangeSelect && rangeSelect.value === '12m' ? 12 : 6);
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [];
+    const today = new Date();
+    for (let i = numMonths - 1; i >= 0; i--) {
+        const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+        months.push({ label: monthNames[d.getMonth()], year: d.getFullYear(), monthIdx: d.getMonth() });
+    }
+
+    // Dynamic aggregated metrics per month from real portalData
+    const allTickets = portalData.support?.tickets || portalData.tickets || [];
+
+    const series1 = months.map(m => {
+        return allTickets.filter(t => {
+            if (!t.creation) return false;
+            const d = new Date(t.creation);
+            return d.getFullYear() === m.year && d.getMonth() === m.monthIdx;
+        }).length;
+    });
+
+    const series2 = months.map(m => {
+        return allTickets.filter(t => {
+            if (!t.creation) return false;
+            const st = (t.status || '').toLowerCase();
+            const d = new Date(t.creation);
+            return (st === 'resolved' || st === 'closed') && d.getFullYear() === m.year && d.getMonth() === m.monthIdx;
+        }).length;
+    });
+
+    const series3 = months.map(m => {
+        return allTickets.filter(t => {
+            if (!t.creation) return false;
+            const d = new Date(t.creation);
+            return (t.sla_met || true) && d.getFullYear() === m.year && d.getMonth() === m.monthIdx;
+        }).length;
+    });
+
+    const maxVal = Math.max(10, ...series1, ...series2, ...series3);
+    const w = wrap.clientWidth > 0 ? wrap.clientWidth : 560;
+    const h = wrap.clientHeight > 0 ? wrap.clientHeight : 200;
+    const paddingLeft = 30;
+    const paddingRight = 15;
+    const paddingTop = 20;
+    const paddingBottom = 25;
+    const chartW = Math.max(10, w - paddingLeft - paddingRight);
+    const chartH = Math.max(10, h - paddingTop - paddingBottom);
+
+    const getCoords = (data) => {
+        return data.map((val, idx) => {
+            const x = paddingLeft + (idx / Math.max(1, data.length - 1)) * chartW;
+            const y = h - paddingBottom - (val / maxVal) * chartH;
+            return { x, y, val };
+        });
+    };
+
+    const pts1 = getCoords(series1);
+    const pts2 = getCoords(series2);
+    const pts3 = getCoords(series3);
+
+    const makeSmoothPath = (pts) => {
+        if (!pts || pts.length === 0) return '';
+        let d = `M ${pts[0].x} ${pts[0].y}`;
+        for (let i = 0; i < pts.length - 1; i++) {
+            const curr = pts[i];
+            const next = pts[i + 1];
+            const cp1x = curr.x + (next.x - curr.x) / 2;
+            const cp1y = curr.y;
+            const cp2x = curr.x + (next.x - curr.x) / 2;
+            const cp2y = next.y;
+            d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${next.x} ${next.y}`;
+        }
+        return d;
+    };
+
+    let gridLinesHtml = '';
+    const step = Math.ceil(maxVal / 5);
+    for (let v = 0; v <= maxVal; v += step) {
+        const y = h - paddingBottom - (v / maxVal) * chartH;
+        gridLinesHtml += `<line x1="${paddingLeft}" y1="${y}" x2="${w - paddingRight}" y2="${y}" stroke="#f1f5f9" stroke-width="1"/>`;
+        gridLinesHtml += `<text x="${paddingLeft - 8}" y="${y + 4}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="Inter">${v}</text>`;
+    }
+
+    let xLabelsHtml = '';
+    months.forEach((m, idx) => {
+        const x = paddingLeft + (idx / Math.max(1, months.length - 1)) * chartW;
+        xLabelsHtml += `<text x="${x}" y="${h - 6}" text-anchor="middle" font-size="11" fill="#64748b" font-family="Inter">${m.label}</text>`;
+    });
+
+    const renderDots = (pts, color) => {
+        return pts.map(p => `<circle cx="${p.x}" cy="${p.y}" r="4" fill="${color}" stroke="#ffffff" stroke-width="2"><title>${p.val}</title></circle>`).join('');
+    };
+
+    wrap.innerHTML = `
+        <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%; height:100%; overflow:visible;">
+            ${gridLinesHtml}
+            ${xLabelsHtml}
+            <path d="${makeSmoothPath(pts1)}" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
+            <path d="${makeSmoothPath(pts2)}" fill="none" stroke="#10b981" stroke-width="3" stroke-linecap="round"/>
+            <path d="${makeSmoothPath(pts3)}" fill="none" stroke="#a855f7" stroke-width="3" stroke-linecap="round"/>
+            ${renderDots(pts1, '#2563eb')}
+            ${renderDots(pts2, '#10b981')}
+            ${renderDots(pts3, '#a855f7')}
+        </svg>
+    `;
+}
+
+function getBrandInitials(str) {
+    if (!str) return 'RN';
+    let cleanStr = String(str).replace(/^ti-brand-/, '').replace(/^ti-/, '').trim();
+    if (!cleanStr) return 'RN';
+    const words = cleanStr.split(/[\s_\-]+/).filter(w => w.length > 0);
+    if (words.length >= 2) {
+        const c1 = words[0].replace(/[^a-zA-Z0-9]/g, '').charAt(0);
+        const c2 = words[1].replace(/[^a-zA-Z0-9]/g, '').charAt(0);
+        const pair = (c1 + c2).toUpperCase();
+        if (pair.length === 2) return pair;
+    }
+    const single = cleanStr.replace(/[^a-zA-Z0-9]/g, '');
+    if (single.length >= 2) {
+        return single.slice(0, 2).toUpperCase();
+    }
+    return (single || 'RN').slice(0, 2).toUpperCase();
+}
+
+function createBrandIconElement(ren) {
+    const childBrand = (ren.items && ren.items.length) ? (ren.items[0].item_brand || ren.items[0].brand) : '';
+    const childLogo = (ren.items && ren.items.length) ? (ren.items[0].image || ren.items[0].logo) : '';
+
+    const rawBrand = (ren.brand && !ren.brand.startsWith('ti-')) ? ren.brand : '';
+    const brandName = ren.brand_name || rawBrand || childBrand || ren.product_name || ren.item_name || ren.name || 'Renewal';
+    const logoUrl = ren.brand_logo || ren.logo || childLogo || ren.image || ren.item_image || ren.product_image || ren.brand_icon_url || ren.icon_url;
+
+    const isImageUrl = logoUrl && typeof logoUrl === 'string' &&
+        (logoUrl.startsWith('http://') || logoUrl.startsWith('https://') || logoUrl.startsWith('/') || logoUrl.startsWith('data:image/') || /\.(png|jpg|jpeg|svg|webp|ico|gif)/i.test(logoUrl));
+
+    if (isImageUrl) {
+        const img = cel('img', {
+            src: logoUrl,
+            alt: brandName,
+            style: 'width:100%; height:100%; object-fit:contain; border-radius:6px; padding:3px;'
+        });
+        const container = cel('div', { class: 'db-brand-icon', style: 'overflow:hidden;' }, [img]);
+
+        img.onerror = function () {
+            const initials = getBrandInitials(brandName);
+            container.replaceChildren(document.createTextNode(initials));
+            container.style.background = '#eff6ff';
+            container.style.color = '#2563eb';
+            container.style.fontWeight = '700';
+            container.style.fontSize = '13px';
+            container.style.letterSpacing = '0.5px';
+        };
+        return container;
+    }
+
+    const initials = getBrandInitials(brandName);
+    const bgColor = ren.brandBg || '#eff6ff';
+    const textColor = ren.brandColor || '#2563eb';
+    return cel('div', {
+        class: 'db-brand-icon',
+        style: `color:${textColor}; font-weight:700; font-size:13px; letter-spacing:0.5px;`
+    }, [initials]);
+}
+
+function renderRenewalsDueSoonList() {
+    const listEl = document.getElementById('db-renewals-due-list');
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const renewals = (portalData.renewals || []).filter(ren => {
+        const dispStatus = getRenewalDisplayStatus(ren);
+        if (dispStatus === 'Draft') return false;
+        const endDate = ren.end_date ? new Date(ren.end_date) : null;
+        const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : null;
+        if (daysLeft === null) return false;
+        // Show: expiring within next 90 days OR expired within last 30 days
+        return daysLeft <= 90 && daysLeft >= -30;
+    });
+
+    renewals.sort((a, b) => {
+        const dA = a.end_date ? new Date(a.end_date) : new Date(8640000000000000);
+        const dB = b.end_date ? new Date(b.end_date) : new Date(8640000000000000);
+        return dA - dB;
+    });
+
+    const items = renewals.slice(0, 3);
+    if (items.length === 0) {
+        listEl.appendChild(cel('div', { style: 'text-align:center; color:var(--ink-soft); padding:30px 12px; font-size:13px;' }, [
+            cel('i', { class: 'ti ti-calendar-off', style: 'font-size:24px; display:block; margin-bottom:6px; opacity:0.6;' }),
+            document.createTextNode('No renewals due soon.')
+        ]));
+        return;
+    }
+
+    items.forEach(ren => {
+        const name = ren.product_name || ren.name;
+        const endDate = ren.end_date ? new Date(ren.end_date) : null;
+        const days = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 0;
+        const isExpired = days < 0;
+        const dateStr = ren.end_date ? formatDate(ren.end_date) : 'N/A';
+        const qtyStr = ren.qty || (ren.quantity ? `${ren.quantity} Licenses` : '0 License');
+        const subText = isExpired
+            ? `${qtyStr} • Expired on ${dateStr}`
+            : `${qtyStr} • Expires on ${dateStr}`;
+
+        let daysClass;
+        let daysNumText;
+        let daysLblText;
+        if (isExpired) {
+            daysClass = 'red';
+            daysNumText = String(Math.abs(days));
+            daysLblText = 'Days Ago';
+        } else if (days <= 7) {
+            daysClass = 'red';
+            daysNumText = String(days);
+            daysLblText = 'Days Left';
+        } else if (days <= 20) {
+            daysClass = 'orange';
+            daysNumText = String(days);
+            daysLblText = 'Days Left';
+        } else {
+            daysClass = 'yellow';
+            daysNumText = String(days);
+            daysLblText = 'Days Left';
+        }
+
+        const row = cel('div', { class: 'db-renewal-item', onclick: () => openRenewalDetail(ren) }, [
+            cel('div', { class: 'db-renewal-left' }, [
+                createBrandIconElement(ren),
+                cel('div', {}, [
+                    cel('div', { class: 'db-renewal-title', textContent: name }),
+                    cel('div', { class: 'db-renewal-sub', textContent: subText })
+                ])
+            ]),
+            cel('div', { class: 'db-days-badge' }, [
+                cel('div', { class: `db-days-num ${daysClass}`, textContent: daysNumText }),
+                cel('div', { class: 'db-days-lbl', textContent: daysLblText })
+            ])
+        ]);
+        listEl.appendChild(row);
+    });
+}
+
+function renderRecentTicketsList() {
+    const listEl = document.getElementById('db-recent-tickets-list');
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    const tickets = portalData.support?.tickets || portalData.tickets || [];
+    if (tickets.length === 0) {
+        listEl.appendChild(cel('div', { style: 'text-align:center; color:var(--ink-soft); padding:30px 12px; font-size:13px;' }, [
+            cel('i', { class: 'ti ti-inbox-off', style: 'font-size:24px; display:block; margin-bottom:6px; opacity:0.6;' }),
+            document.createTextNode('No recent tickets found.')
+        ]));
+        return;
+    }
+
+    // Sort by creation descending
+    const sortedTickets = [...tickets].sort((a, b) => String(b.creation || '').localeCompare(String(a.creation || '')));
+    const items = sortedTickets.slice(0, 3);
+    items.forEach(t => {
+        const prio = (t.priority || 'Low').toLowerCase();
+        const st = t.status || 'Open';
+        const stColor = st.toLowerCase() === 'resolved' || st.toLowerCase() === 'closed' ? 'green' : 'blue';
+        const metaStr = `#${t.name} • Created ${t.created_ago || (t.creation ? formatDate(t.creation) : 'recently')}`;
+
+        const row = cel('div', { class: 'db-ticket-item', onclick: () => openTicketDetail(t) }, [
+            cel('div', { style: 'display:flex; align-items:flex-start; gap:10px;' }, [
+                cel('span', { class: `db-ticket-pill ${prio}`, textContent: t.priority || 'Low' }),
+                cel('div', {}, [
+                    cel('div', { class: 'db-ticket-title', textContent: t.subject }),
+                    cel('div', { class: 'db-ticket-meta', textContent: metaStr })
+                ])
+            ]),
+            cel('div', { class: `db-status-text ${stColor}` }, [
+                document.createTextNode(st + ' '),
+                cel('span', { style: 'font-size:8px;' }, ['●'])
+            ])
+        ]);
+        listEl.appendChild(row);
+    });
+}
+
+function renderOutstandingInvoicesList() {
+    const listEl = document.getElementById('db-outstanding-invoices-list');
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    const invoices = (portalData.invoices || []).filter(inv => {
+        const st = (getInvoiceDisplayStatus(inv) || '').toLowerCase();
+        return st === 'unpaid' || st === 'overdue' || (inv.outstanding_amount && inv.outstanding_amount > 0);
+    });
+
+    if (invoices.length === 0) {
+        listEl.appendChild(cel('div', { style: 'text-align:center; color:var(--ink-soft); padding:30px 12px; font-size:13px;' }, [
+            cel('i', { class: 'ti ti-file-off', style: 'font-size:24px; display:block; margin-bottom:6px; opacity:0.6;' }),
+            document.createTextNode('No outstanding invoices.')
+        ]));
+        return;
+    }
+
+    const items = invoices.slice(0, 2);
+    items.forEach(inv => {
+        const st = getInvoiceDisplayStatus(inv) || inv.status || 'Unpaid';
+        const isOverdue = st.toLowerCase() === 'overdue';
+        const badgeClass = isOverdue ? 'pill red' : 'pill orange';
+
+        const row = cel('div', { class: 'db-invoice-item', onclick: () => openInvoiceDetail(inv) }, [
+            cel('div', {}, [
+                cel('div', { class: 'db-invoice-name', textContent: inv.name }),
+                cel('div', { class: 'db-invoice-date', textContent: formatDate(inv.posting_date) })
+            ]),
+            cel('div', {}, [
+                cel('div', { class: 'db-invoice-amt', textContent: formatCurrency(inv.grand_total) }),
+                cel('div', { style: 'text-align:right; margin-top:2px;' }, [
+                    cel('span', { class: badgeClass, style: 'font-size:10.5px; padding:2px 6px;', textContent: st })
+                ])
+            ])
+        ]);
+        listEl.appendChild(row);
+    });
+}
+
+function renderActiveProductsSummary() {
+    const donutSvg = document.getElementById('db-products-donut-svg');
+    const legendEl = document.getElementById('db-products-legend');
+    const totalEl = document.getElementById('db-prod-donut-total');
+
+    const activeProducts = (portalData.renewals || []).filter(r => (getRenewalDisplayStatus(r) || '').toLowerCase() === 'active');
+    const total = activeProducts.length;
+    if (totalEl) totalEl.textContent = String(total);
+
+    if (total === 0) {
+        if (donutSvg) {
+            donutSvg.innerHTML = `<circle cx="18" cy="18" r="15.9155" fill="none" stroke="#e2e8f0" stroke-width="4.5"/>`;
+        }
+        if (legendEl) {
+            legendEl.replaceChildren();
+            legendEl.appendChild(cel('div', { style: 'font-size:12px; color:var(--ink-soft); font-style:italic;' }, ['No active products available.']));
+        }
+        return;
+    }
+
+    // Group dynamically Item Group-wise
+    const categoryColors = ['#10b981', '#a855f7', '#2563eb', '#f97316', '#64748b', '#ec4899', '#06b6d4'];
+    const catMap = {};
+    activeProducts.forEach(r => {
+        const childItem = (r.items && r.items.length) ? r.items[0] : {};
+        let cat = r.item_group || childItem.item_group || r.category || r.product_category || 'General';
+        if (!cat || typeof cat !== 'string' || !cat.trim() || cat.trim().toLowerCase() === 'undefined' || cat.trim().toLowerCase() === 'null') {
+            cat = 'General';
+        }
+        cat = cat.trim();
+        catMap[cat] = (catMap[cat] || 0) + 1;
+    });
+
+    const categories = Object.keys(catMap).map((catName, idx) => {
+        const count = catMap[catName];
+        const pct = Math.round((count / total) * 100);
+        return {
+            name: catName,
+            count: count,
+            pct: pct,
+            color: categoryColors[idx % categoryColors.length]
+        };
+    });
+
+    if (donutSvg) {
+        let accumulatedPct = 0;
+        let pathsHtml = '';
+        categories.forEach(cat => {
+            const strokeDash = `${cat.pct} ${100 - cat.pct}`;
+            const strokeOffset = -accumulatedPct;
+            accumulatedPct += cat.pct;
+            pathsHtml += `<circle cx="18" cy="18" r="15.9155" fill="none" stroke="${cat.color}" stroke-width="4.5" stroke-dasharray="${strokeDash}" stroke-dashoffset="${strokeOffset}"/>`;
+        });
+        donutSvg.innerHTML = pathsHtml;
+    }
+
+    if (legendEl) {
+        legendEl.replaceChildren();
+        categories.forEach(cat => {
+            const row = cel('div', { class: 'db-prod-legend-row' }, [
+                cel('div', { class: 'db-prod-legend-label' }, [
+                    cel('span', { class: 'db-legend-dot', style: `background:${cat.color}` }),
+                    document.createTextNode(cat.name)
+                ]),
+                cel('div', { class: 'db-prod-legend-val', textContent: `${cat.count} (${cat.pct}%)` })
+            ]);
+            legendEl.appendChild(row);
+        });
+    }
+}
+
+// Renewals & Detail Render with Filtering & Pagination
+function renderRenewals() {
+    const tbody = document.getElementById('renewals-tbody');
+    if (!tbody || !portalData) return;
+
+    const rawRenewals = portalData.renewals || [];
+    const search = listState.renewals.search.toLowerCase();
+    const statusTab = listState.renewals.status;
+    const today = new Date();
+
+    // Compute Tab Counts
+    let cntActive = 0, cntDue = 0, cntExpired = 0;
+    rawRenewals.forEach(r => {
+        const endDate = r.end_date ? new Date(r.end_date) : null;
+        const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+        const rawSt = (r.status || 'Active').toLowerCase();
+
+        if (rawSt === 'draft') {
+            // Draft excluded from visible tabs
+        } else if (daysLeft < 0 || rawSt === 'expired' || rawSt === 'lost') {
+            // Only count expired if within last 90 days
+            if (daysLeft >= -90) cntExpired++;
+        } else {
+            cntActive++;
+            if (daysLeft <= 30) {
+                cntDue++;
+            }
+        }
+    });
+
+    const tabsRow = document.getElementById('renewals-tabs-row');
+    if (tabsRow) {
+        tabsRow.querySelectorAll('.tab').forEach(t => {
+            const st = t.getAttribute('data-status') || 'active';
+            if (st === statusTab) t.classList.add('on');
+            else t.classList.remove('on');
+        });
+        const tActive = tabsRow.querySelector('[data-status="active"]');
+        if (tActive) tActive.textContent = `Active (${cntActive})`;
+        const tDue = tabsRow.querySelector('[data-status="due"]');
+        if (tDue) tDue.textContent = `Due Soon 30d (${cntDue})`;
+        const tExpired = tabsRow.querySelector('[data-status="expired"]');
+        if (tExpired) tExpired.textContent = `Expired (${cntExpired})`;
+    }
+
+    // Filter Items
+    let items = rawRenewals;
+    if (statusTab === 'active') {
+        // Active: not draft/expired/lost, and not yet expired
+        items = items.filter(r => {
+            const endDate = r.end_date ? new Date(r.end_date) : null;
+            const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+            const rawSt = (r.status || 'Active').toLowerCase();
+            return rawSt !== 'draft' && rawSt !== 'expired' && rawSt !== 'lost' && daysLeft >= 0;
+        });
+    } else if (statusTab === 'due') {
+        // Due Soon 30d: expiring within next 30 days
+        items = items.filter(r => {
+            const endDate = r.end_date ? new Date(r.end_date) : null;
+            const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+            const rawSt = (r.status || 'Active').toLowerCase();
+            return rawSt !== 'draft' && rawSt !== 'expired' && rawSt !== 'lost' && daysLeft <= 30 && daysLeft >= 0;
+        });
+    } else if (statusTab === 'expired') {
+        // Show only renewals expired within the last 90 days
+        items = items.filter(r => {
+            const endDate = r.end_date ? new Date(r.end_date) : null;
+            const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+            const rawSt = (r.status || '').toLowerCase();
+            const isExpiredStatus = rawSt === 'expired' || rawSt === 'lost';
+            // Must be past end_date AND within last 90 days
+            return daysLeft < 0 && daysLeft >= -90 || (isExpiredStatus && daysLeft >= -90);
+        });
+    }
+
+    if (search) {
+        items = items.filter(r => {
+            const dispSt = getRenewalDisplayStatus(r);
+            const txt = `${r.name || ''} ${r.product_name || ''} ${r.invoice_no || ''} ${r.sales_user || ''} ${r.company || ''} ${r.total_amount || ''} ${dispSt}`.toLowerCase();
+            return txt.includes(search);
+        });
+    }
+
+    const totalCount = items.length;
+    const limit = listState.renewals.limit || 10;
+    const visibleItems = items.slice(0, limit);
+
+    updateQueuePaginationUI('renewals', totalCount);
+
+    tbody.replaceChildren();
+
+    if (visibleItems.length === 0) {
+        tbody.appendChild(cel('tr', {}, [cel('td', { colspan: 5, style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No matching renewals found.'])]));
+        return;
+    }
+
+    visibleItems.forEach(ren => {
+        const endDate = ren.end_date ? new Date(ren.end_date) : null;
+        const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : null;
+        const dispStatus = getRenewalDisplayStatus(ren);
+        const statusClass = getRenewalStatusClass(dispStatus);
+
+        let daysBadgeClass = 'pill blue';
+        let daysLabel = '-';
+        if (daysLeft !== null) {
+            if (daysLeft < 0) {
+                daysBadgeClass = 'pill red';
+                daysLabel = `${Math.abs(daysLeft)} Days Ago`;
+            } else if (daysLeft <= 7) {
+                daysBadgeClass = 'pill red';
+                daysLabel = `${daysLeft} Days Left`;
+            } else if (daysLeft <= 30) {
+                daysBadgeClass = 'pill orange';
+                daysLabel = `${daysLeft} Days Left`;
+            } else {
+                daysBadgeClass = 'pill green';
+                daysLabel = `${daysLeft} Days Left`;
+            }
+        }
+
+        const nameStr = ren.product_name || ren.name;
+        const subStr = ren.product_name ? `ID: ${ren.name}` : `Renewal Service`;
+
+        const tr = cel('tr', { onclick: () => openRenewalDetail(ren) }, [
+            cel('td', {}, [
+                cel('div', { class: 'tbl-item-cell' }, [
+                    cel('div', { class: 'tbl-item-icon blue' }, [cel('i', { class: 'ti ti-refresh' })]),
+                    cel('div', {}, [
+                        cel('div', { class: 'tbl-item-title', textContent: nameStr }),
+                        cel('div', { class: 'tbl-item-sub', textContent: subStr })
+                    ])
+                ])
+            ]),
+            cel('td', { style: 'vertical-align:middle;' }, [formatDate(ren.end_date)]),
+            cel('td', { style: 'vertical-align:middle;' }, [
+                cel('span', { class: daysBadgeClass }, [daysLabel])
+            ]),
+            cel('td', { style: 'vertical-align:middle; font-weight:700; font-variant-numeric:tabular-nums; color:#0f172a; font-size:14px;' }, [formatCurrency(ren.total_amount)]),
+            cel('td', { style: 'vertical-align:middle;' }, [
+                cel('span', { class: `pill ${statusClass}` }, [dispStatus])
+            ])
+        ]);
+        tbody.appendChild(tr);
+    });
+}
+
+function openRenewalDetail(ren, skipHash) {
+    const setText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val || '-';
+    };
+
+    const dispStatus = getRenewalDisplayStatus(ren);
+    const statusClass = getRenewalStatusClass(dispStatus);
+
+    setText('rd-title', ren.product_name || ren.name);
+    setText('rd-subtitle', `Renewal ID ${ren.name}`);
+    setText('rd-date', formatDate(ren.end_date));
+    setText('rd-amount', formatCurrency(ren.total_amount));
+    setText('rd-qty', ren.total_quantity ? `${ren.total_quantity} units` : '0 unit');
+    setText('rd-owner', ren.sales_user || ren.renewal_owner || '-');
+    setText('rd-company', ren.company || portalData.customer_info?.customer_name || '-');
+    setText('rd-status', dispStatus);
+
+    const statusPill = document.getElementById('rd-status-pill');
+    if (statusPill) {
+        statusPill.textContent = dispStatus;
+        statusPill.className = `pill ${statusClass}`;
+    }
+
+    const today = new Date();
+    const endDate = ren.end_date ? new Date(ren.end_date) : null;
+    const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : '-';
+    setText('rd-days-remaining', String(daysLeft));
+
+    const itemsTbody = document.getElementById('rd-items-tbody');
+    if (itemsTbody) {
+        itemsTbody.replaceChildren();
+        const countEl = document.getElementById('rd-items-count');
+        const items = ren.items || [];
+        if (countEl) countEl.textContent = `${items.length}`;
+
+        if (items.length === 0) {
+            itemsTbody.appendChild(cel('tr', {}, [
+                cel('td', { colspan: '5', style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No items breakdown available.'])
+            ]));
+        } else {
+            items.forEach(it => {
+                const titleDiv = cel('div', { class: 'pf-item-title', textContent: it.item_name || it.item_code });
+                const codeTag = it.item_code && it.item_name && it.item_code !== it.item_name ? cel('span', { class: 'pf-item-code-tag', textContent: it.item_code }) : null;
+                const descNode = createItemDescNode(it.description || ren.description || '');
+
+                itemsTbody.appendChild(cel('tr', {}, [
+                    cel('td', {}, [titleDiv, codeTag, descNode]),
+                    cel('td', { style: 'text-align:center;font-weight:600;' }, [String(it.qty || 1)]),
+                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(it.rate)]),
+                    cel('td', { style: 'text-align:right;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;' }, [formatCurrency(it.amount)]),
+                    cel('td', { style: 'text-align:center;font-size:12px;color:var(--ink-soft);' }, [`${formatDate(it.start_date)} → ${formatDate(it.end_date)}`])
+                ]));
+            });
         }
     }
 
-    if (enableShowMore) {
-        const plainText = stripHtmlTags(raw).trim();
-        if (plainText && plainText !== '-' && plainText !== 'No description provided.' && plainText !== 'No description text provided for this ticket.') {
-            const blockCount = (raw.match(/<\/p>|<br\s*\/?>|\n/gi) || []).length;
-            const isLong = plainText.length > 100 || (blockCount > 1 && plainText.length > 60);
+    // Description & Notes binding
+    const descText = ren.description || ren.note || ren.terms || ren.remarks || '';
+    const descCard = document.getElementById('rd-desc-card');
+    const descTextEl = document.getElementById('rd-desc-text');
+    const descWrap = document.getElementById('rd-desc-wrap');
+    const descToggle = document.getElementById('rd-desc-toggle');
 
-            if (isLong) {
-                el.classList.add('pf-item-desc-clamped');
-
-                const toggleBtn = cel('button', {
-                    type: 'button',
-                    class: 'pf-desc-toggle-btn',
-                    style: 'margin-top: 6px;',
-                    'aria-expanded': 'false'
-                }, [
-                    cel('span', { class: 'pf-desc-toggle-text', textContent: 'Show more' }),
-                    cel('i', { class: 'ti ti-chevron-down' })
-                ]);
-
-                toggleBtn.addEventListener('click', function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const isClamped = el.classList.contains('pf-item-desc-clamped');
-                    const btnText = toggleBtn.querySelector('.pf-desc-toggle-text');
-                    const btnIcon = toggleBtn.querySelector('i');
-
-                    if (isClamped) {
-                        el.classList.remove('pf-item-desc-clamped');
-                        el.classList.add('pf-item-desc-expanded');
-                        if (btnText) btnText.textContent = 'Show less';
-                        if (btnIcon) btnIcon.className = 'ti ti-chevron-up';
-                        toggleBtn.setAttribute('aria-expanded', 'true');
+    if (descCard && descTextEl) {
+        if (descText.trim()) {
+            descCard.style.display = 'block';
+            descTextEl.textContent = descText;
+            if (descWrap) descWrap.classList.remove('expanded');
+            if (descToggle) {
+                descToggle.innerHTML = '<i class="ti ti-chevron-down"></i> Read More';
+                setTimeout(() => {
+                    if (descTextEl.scrollHeight > 72) {
+                        descToggle.style.display = 'inline-flex';
                     } else {
-                        el.classList.remove('pf-item-desc-expanded');
-                        el.classList.add('pf-item-desc-clamped');
-                        if (btnText) btnText.textContent = 'Show more';
-                        if (btnIcon) btnIcon.className = 'ti ti-chevron-down';
-                        toggleBtn.setAttribute('aria-expanded', 'false');
+                        descToggle.style.display = 'none';
                     }
-                });
-
-                el.parentNode.appendChild(toggleBtn);
+                }, 50);
             }
+        } else {
+            descCard.style.display = 'none';
         }
+    }
+
+    go('renewal-detail', null, true);
+    if (!skipHash && ren && ren.name) {
+        updateUrlPath('renewals/' + encodeURIComponent(ren.name));
+    }
+}
+
+// Invoices & Detail Render with Filtering & Pagination
+function renderInvoices() {
+    const tbody = document.getElementById('invoices-tbody');
+    if (!tbody || !portalData) return;
+
+    const rawInvoices = portalData.invoices || [];
+    const search = listState.invoices.search.toLowerCase();
+    const statusTab = listState.invoices.status;
+
+    // Compute Tab Counts
+    let cntAll = rawInvoices.length;
+    let cntUnpaid = 0, cntPaid = 0, cntOverdue = 0;
+    rawInvoices.forEach(inv => {
+        const st = getInvoiceDisplayStatus(inv).toLowerCase();
+        if (st === 'paid') cntPaid++;
+        else if (st === 'overdue') cntOverdue++;
+        else if (st === 'unpaid') cntUnpaid++;
+    });
+
+    const tabsRow = document.getElementById('invoices-tabs-row');
+    if (tabsRow) {
+        tabsRow.querySelectorAll('.tab').forEach(t => {
+            const st = t.getAttribute('data-status') || 'all';
+            if (st === statusTab) t.classList.add('on');
+            else t.classList.remove('on');
+        });
+        const tAll = tabsRow.querySelector('[data-status="all"]');
+        if (tAll) tAll.textContent = `All (${cntAll})`;
+        const tUnpaid = tabsRow.querySelector('[data-status="unpaid"]');
+        if (tUnpaid) tUnpaid.textContent = `Unpaid (${cntUnpaid})`;
+        const tPaid = tabsRow.querySelector('[data-status="paid"]');
+        if (tPaid) tPaid.textContent = `Paid (${cntPaid})`;
+        const tOverdue = tabsRow.querySelector('[data-status="overdue"]');
+        if (tOverdue) tOverdue.textContent = `Overdue (${cntOverdue})`;
+    }
+
+    // Filter Items
+    let items = rawInvoices;
+    if (statusTab === 'unpaid') {
+        items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() === 'unpaid');
+    } else if (statusTab === 'paid') {
+        items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() === 'paid');
+    } else if (statusTab === 'overdue') {
+        items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() === 'overdue');
+    }
+
+    if (search) {
+        items = items.filter(inv => {
+            const dispSt = getInvoiceDisplayStatus(inv);
+            const txt = `${inv.name || ''} ${inv.posting_date || ''} ${inv.due_date || ''} ${inv.grand_total || ''} ${dispSt}`.toLowerCase();
+            return txt.includes(search);
+        });
+    }
+
+    const totalCount = items.length;
+    const limit = listState.invoices.limit || 10;
+    const visibleItems = items.slice(0, limit);
+
+    updateQueuePaginationUI('invoices', totalCount);
+
+    tbody.replaceChildren();
+
+    if (visibleItems.length === 0) {
+        tbody.appendChild(cel('tr', {}, [cel('td', { colspan: 5, style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No matching invoices found.'])]));
+        return;
+    }
+
+    visibleItems.forEach(inv => {
+        const dispStatus = getInvoiceDisplayStatus(inv);
+        const statusClass = getInvoiceStatusClass(dispStatus);
+
+        const tr = cel('tr', { onclick: () => openInvoiceDetail(inv) }, [
+            cel('td', {}, [
+                cel('div', { class: 'tbl-item-cell' }, [
+                    cel('div', { class: 'tbl-item-icon green' }, [cel('i', { class: 'ti ti-file-invoice' })]),
+                    cel('div', {}, [
+                        cel('div', { class: 'tbl-item-title', textContent: inv.name }),
+                        cel('div', { class: 'tbl-item-sub', textContent: `Due: ${formatDate(inv.due_date)}` })
+                    ])
+                ])
+            ]),
+            cel('td', { style: 'vertical-align:middle;' }, [formatDate(inv.posting_date)]),
+            cel('td', { style: 'vertical-align:middle; font-weight:700; font-variant-numeric:tabular-nums; color:#0f172a; font-size:14px;' }, [formatCurrency(inv.grand_total)]),
+            cel('td', { style: 'vertical-align:middle;' }, [cel('span', { class: `pill ${statusClass}` }, [dispStatus])]),
+            cel('td', { style: 'vertical-align:middle;' }, [
+                cel('button', { class: 'btn sm', style: 'padding:4px 8px; font-size:12px; margin-right:6px;', title: 'Preview Invoice PDF', onclick: (e) => { e.stopPropagation(); previewInvoicePdf(inv.name); } }, [
+                    cel('i', { class: 'ti ti-eye', style: 'color:#2563eb;' }), document.createTextNode(' Preview')
+                ]),
+                cel('button', { class: 'btn sm', style: 'padding:4px 8px; font-size:12px;', title: 'Download PDF', onclick: (e) => { e.stopPropagation(); previewInvoicePdf(inv.name); } }, [
+                    cel('i', { class: 'ti ti-download' })
+                ])
+            ])
+        ]);
+        tbody.appendChild(tr);
+    });
+}
+
+function openInvoiceDetail(inv, skipHash) {
+    currentInvoice = inv;
+    const setText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val || '-';
+    };
+
+    const dispStatus = getInvoiceDisplayStatus(inv);
+
+    const netTotal = inv.net_total != null ? inv.net_total : ((inv.grand_total || 0) - (inv.total_taxes_and_charges || 0));
+    const totalTaxes = inv.total_taxes_and_charges != null ? inv.total_taxes_and_charges : ((inv.taxes || []).reduce((acc, t) => acc + (t.tax_amount || 0), 0));
+
+    setText('inv-title', inv.name);
+    setText('inv-subtitle', `Issued ${formatDate(inv.posting_date)} · Due ${formatDate(inv.due_date)}`);
+    setText('inv-net-total', formatCurrency(netTotal));
+    setText('inv-taxes-total', formatCurrency(totalTaxes));
+    setText('inv-total', formatCurrency(inv.grand_total));
+    setText('inv-due', formatCurrency(inv.outstanding_amount));
+    setText('inv-status-val', dispStatus);
+    const cleanAddr = (addrStr) => {
+        if (!addrStr) return '';
+        return addrStr
+            .replace(/<br\s*[\/]?>/gi, ', ')
+            .replace(/<[^>]*>/g, '')
+            .replace(/\s+,/g, ',')
+            .replace(/,\s*,/g, ', ')
+            .replace(/,\s*$/, '')
+            .trim();
+    };
+
+    setText('inv-customer-name', portalData.customer_info?.customer_name || 'Customer Name');
+    const billingAddr = cleanAddr(inv.address_display) || portalData.customer_info?.billing_address || 'Primary Address';
+    setText('inv-billing-address', billingAddr);
+
+    setText('inv-ship-customer-name', portalData.customer_info?.customer_name || 'Customer Name');
+    const shippingAddr = cleanAddr(inv.shipping_address) || portalData.customer_info?.shipping_address || billingAddr || '-';
+    setText('inv-shipping-address', shippingAddr);
+
+    const pdfBtn = document.getElementById('inv-pdf-btn');
+    if (pdfBtn) {
+        pdfBtn.onclick = () => previewInvoicePdf(inv.name);
+    }
+
+    const itemsTbody = document.getElementById('inv-items-tbody');
+    if (itemsTbody) {
+        itemsTbody.replaceChildren();
+        const countEl = document.getElementById('inv-items-count');
+        const items = inv.items || [];
+        if (countEl) countEl.textContent = `${items.length}`;
+
+        if (items.length === 0) {
+            itemsTbody.appendChild(cel('tr', {}, [
+                cel('td', { colspan: '4', style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No line items recorded.'])
+            ]));
+        } else {
+            items.forEach(it => {
+                const titleDiv = cel('div', { class: 'pf-item-title', textContent: it.item_name || it.item_code });
+                const codeTag = it.item_code && it.item_name && it.item_code !== it.item_name ? cel('span', { class: 'pf-item-code-tag', textContent: it.item_code }) : null;
+                const descNode = createItemDescNode(it.description || '');
+
+                itemsTbody.appendChild(cel('tr', {}, [
+                    cel('td', {}, [titleDiv, codeTag, descNode]),
+                    cel('td', { style: 'text-align:center;font-weight:600;' }, [String(it.qty || 1)]),
+                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(it.rate)]),
+                    cel('td', { style: 'text-align:right;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;' }, [formatCurrency(it.amount)])
+                ]));
+            });
+        }
+    }
+
+    // Render Taxes & Charges Breakdown
+    const taxesCard = document.getElementById('inv-taxes-card');
+    const taxesTbody = document.getElementById('inv-taxes-tbody');
+    if (taxesTbody) {
+        taxesTbody.replaceChildren();
+        const taxes = inv.taxes || [];
+        if (taxesCard) taxesCard.style.display = taxes.length > 0 ? 'block' : 'none';
+        if (taxes.length === 0) {
+            taxesTbody.appendChild(cel('tr', {}, [
+                cel('td', { colspan: '3', style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No additional taxes and charges recorded.'])
+            ]));
+        } else {
+            console.log("taxes", taxes);
+            taxes.forEach(tx => {
+                const taxName = tx.account_head || tx.description || 'Tax';
+                const taxRate = tx.rate != null && tx.rate !== 0 ? `${tx.rate}%` : '-';
+                taxesTbody.appendChild(cel('tr', {}, [
+                    cel('td', { style: 'font-weight:600;' }, [taxName]),
+                    cel('td', { style: 'text-align:center;font-weight:500;' }, [taxRate]),
+                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(tx.tax_amount)]),
+                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(tx.total)])
+                ]));
+            });
+        }
+    }
+
+    go('invoice-detail', null, true);
+    if (!skipHash && inv && inv.name) {
+        updateUrlPath('invoices/' + encodeURIComponent(inv.name));
     }
 }
 
 function createItemDescNode(rawDesc) {
     if (!rawDesc || typeof rawDesc !== 'string' || !rawDesc.trim()) return null;
 
-    const plainText = stripHtmlTags(rawDesc).trim();
-    if (!plainText || plainText === '-' || plainText === 'No description provided.' || plainText === 'No description text provided for this ticket.') {
+    const tempEl = document.createElement('div');
+    tempEl.innerHTML = rawDesc;
+    const plainText = (tempEl.textContent || tempEl.innerText || '').replace(/^description\s*:\s*/i, '').trim();
+
+    if (!plainText || plainText === '-' || plainText === '--' || plainText === 'null' || plainText === 'No description provided.') {
         return null;
     }
 
     const wrapper = cel('div', { class: 'pf-item-desc-wrapper' });
     const descDiv = cel('div', { class: 'pf-item-desc' });
-    setRichTextOrCleanHtml(descDiv, rawDesc, '');
+    descDiv.innerHTML = tempEl.innerHTML;
     wrapper.appendChild(descDiv);
 
-    const blockCount = (rawDesc.match(/<\/p>|<br\s*\/?>|\n/gi) || []).length;
-    const isLong = plainText.length > 100 || (blockCount > 1 && plainText.length > 60);
+    const isLong = plainText.length > 90 || (rawDesc.match(/<\/p>|<br\s*\/?>|\n/gi) || []).length > 1;
 
     if (isLong) {
         descDiv.classList.add('pf-item-desc-clamped');
 
         const toggleBtn = cel('button', {
             type: 'button',
-            class: 'pf-desc-toggle-btn',
-            'aria-expanded': 'false'
+            class: 'pf-desc-toggle-btn'
         }, [
-            cel('span', { class: 'pf-desc-toggle-text', textContent: 'Show more' }),
+            cel('span', { textContent: 'Show more ' }),
             cel('i', { class: 'ti ti-chevron-down' })
         ]);
 
         toggleBtn.addEventListener('click', function (e) {
-            e.preventDefault();
             e.stopPropagation();
             const isClamped = descDiv.classList.contains('pf-item-desc-clamped');
-            const btnText = toggleBtn.querySelector('.pf-desc-toggle-text');
-            const btnIcon = toggleBtn.querySelector('i');
-
             if (isClamped) {
                 descDiv.classList.remove('pf-item-desc-clamped');
                 descDiv.classList.add('pf-item-desc-expanded');
-                if (btnText) btnText.textContent = 'Show less';
-                if (btnIcon) btnIcon.className = 'ti ti-chevron-up';
-                toggleBtn.setAttribute('aria-expanded', 'true');
+                toggleBtn.querySelector('span').textContent = 'Show less ';
+                toggleBtn.querySelector('i').className = 'ti ti-chevron-up';
             } else {
                 descDiv.classList.remove('pf-item-desc-expanded');
                 descDiv.classList.add('pf-item-desc-clamped');
-                if (btnText) btnText.textContent = 'Show more';
-                if (btnIcon) btnIcon.className = 'ti ti-chevron-down';
-                toggleBtn.setAttribute('aria-expanded', 'false');
+                toggleBtn.querySelector('span').textContent = 'Show more ';
+                toggleBtn.querySelector('i').className = 'ti ti-chevron-down';
             }
         });
 
@@ -200,1162 +1496,796 @@ function createItemDescNode(rawDesc) {
     return wrapper;
 }
 
-const DETAIL_TO_TAB_MAP = {
-    'renewal-detail': 'renewals',
-    'invoice-detail': 'invoices',
-    'order-detail': 'orders',
-    'support-detail': 'support',
-    'support-new': 'support',
-    'contact-detail': 'contacts'
-};
+function toggleDescription(wrapId) {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const toggleBtn = wrap.querySelector('.toggle-desc-btn');
+    const isExpanded = wrap.classList.contains('expanded');
+    if (isExpanded) {
+        wrap.classList.remove('expanded');
+        if (toggleBtn) {
+            toggleBtn.innerHTML = '<i class="ti ti-chevron-down"></i> Read More';
+        }
+    } else {
+        wrap.classList.add('expanded');
+        if (toggleBtn) {
+            toggleBtn.innerHTML = '<i class="ti ti-chevron-up"></i> Show Less';
+        }
+    }
+}
 
-// Tab switching & Clean Path URL Routing
-function pfGo(name, el, skipHash) {
-    document.querySelectorAll('.pf-page').forEach(p => p.classList.remove('on'));
-    const targetPage = document.getElementById('page-' + name);
-    if (targetPage) {
-        targetPage.classList.add('on');
+let currentInvoicePdfBlobUrl = null;
+let currentInvoicePdfFilename = null;
+
+function previewInvoicePdf(invoiceName) {
+    const modal = document.getElementById('cp-invoice-pdf-modal');
+    const iframe = document.getElementById('cp-pdf-modal-iframe');
+    const loading = document.getElementById('cp-pdf-modal-loading');
+    const titleEl = document.getElementById('cp-pdf-modal-title');
+    const subtitleEl = document.getElementById('cp-pdf-modal-subtitle');
+
+    if (!modal) {
+        downloadInvoicePdf(invoiceName);
+        return;
     }
 
-    // Highlight matching sidebar nav link
-    const mainTabName = DETAIL_TO_TAB_MAP[name] || name;
-    document.querySelectorAll('.pf-nav a').forEach(a => a.classList.remove('on'));
+    if (currentInvoicePdfBlobUrl) {
+        URL.revokeObjectURL(currentInvoicePdfBlobUrl);
+        currentInvoicePdfBlobUrl = null;
+    }
 
-    const matchingLink = Array.from(document.querySelectorAll('.pf-nav a')).find(a => {
-        const onclickAttr = a.getAttribute('onclick') || '';
-        return onclickAttr.includes("'" + mainTabName + "'");
+    if (titleEl) titleEl.textContent = `Invoice Preview: ${invoiceName}`;
+    if (subtitleEl) subtitleEl.textContent = `Sales Invoice · ${invoiceName}`;
+    currentInvoicePdfFilename = `${invoiceName}.pdf`;
+
+    if (iframe) {
+        iframe.style.display = 'none';
+        iframe.src = 'about:blank';
+    }
+    if (loading) loading.style.display = 'flex';
+
+    modal.style.display = 'flex';
+
+    if (!window.frappe || !window.frappe.call) {
+        if (loading) loading.style.display = 'none';
+        alert("Preview PDF for " + invoiceName);
+        return;
+    }
+
+    frappe.call({
+        method: "customer_portal.api.download_invoice_pdf",
+        args: { invoice_name: invoiceName },
+        callback: function (r) {
+            if (r.message && r.message.pdf_b64) {
+                if (r.message.filename) {
+                    currentInvoicePdfFilename = r.message.filename;
+                }
+                const byteCharacters = atob(r.message.pdf_b64);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'application/pdf' });
+                currentInvoicePdfBlobUrl = URL.createObjectURL(blob);
+
+                if (iframe) {
+                    iframe.src = currentInvoicePdfBlobUrl + '#toolbar=1';
+                    iframe.style.display = 'block';
+                }
+                if (loading) loading.style.display = 'none';
+            } else {
+                if (loading) loading.style.display = 'none';
+                alert("Could not generate invoice PDF.");
+                cpCloseInvoicePdfModal();
+            }
+        },
+        error: function () {
+            if (loading) loading.style.display = 'none';
+            alert("Failed to load invoice PDF preview.");
+            cpCloseInvoicePdfModal();
+        }
+    });
+}
+
+function cpCloseInvoicePdfModal() {
+    const modal = document.getElementById('cp-invoice-pdf-modal');
+    const iframe = document.getElementById('cp-pdf-modal-iframe');
+    if (modal) modal.style.display = 'none';
+    if (iframe) iframe.src = 'about:blank';
+    if (currentInvoicePdfBlobUrl) {
+        URL.revokeObjectURL(currentInvoicePdfBlobUrl);
+        currentInvoicePdfBlobUrl = null;
+    }
+}
+
+function cpDownloadCurrentInvoicePdf() {
+    if (!currentInvoicePdfBlobUrl) {
+        alert("PDF is not ready for download.");
+        return;
+    }
+    const link = document.createElement('a');
+    link.href = currentInvoicePdfBlobUrl;
+    link.download = currentInvoicePdfFilename || 'Sales-Invoice.pdf';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+function cpPrintInvoicePdf() {
+    const iframe = document.getElementById('cp-pdf-modal-iframe');
+    if (iframe && iframe.contentWindow) {
+        try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        } catch (e) {
+            if (currentInvoicePdfBlobUrl) window.open(currentInvoicePdfBlobUrl, '_blank');
+        }
+    } else if (currentInvoicePdfBlobUrl) {
+        window.open(currentInvoicePdfBlobUrl, '_blank');
+    }
+}
+
+function downloadInvoicePdf(invoiceName) {
+    if (!window.frappe || !window.frappe.call) {
+        alert("Downloading PDF for " + invoiceName);
+        return;
+    }
+    frappe.call({
+        method: "customer_portal.api.download_invoice_pdf",
+        args: { invoice_name: invoiceName },
+        callback: function (r) {
+            if (r.message && r.message.pdf_b64) {
+                const byteCharacters = atob(r.message.pdf_b64);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'application/pdf' });
+                const link = document.createElement('a');
+                link.href = window.URL.createObjectURL(blob);
+                link.download = r.message.filename || `${invoiceName}.pdf`;
+                link.click();
+            } else {
+                alert("Could not generate invoice PDF.");
+            }
+        }
+    });
+}
+
+// Tickets & Detail Render with Filtering & Pagination
+function renderTickets() {
+    const tbody = document.getElementById('tickets-tbody');
+    if (!tbody || !portalData) return;
+
+    const rawTickets = portalData.support?.tickets || portalData.tickets || [];
+    const search = listState.tickets.search.toLowerCase();
+    const statusTab = listState.tickets.status;
+
+    // Compute Tab Counts
+    let cntAll = rawTickets.length;
+    let cntOpen = 0, cntClosed = 0;
+    rawTickets.forEach(t => {
+        const st = getTicketDisplayStatus(t).toLowerCase();
+        if (st === 'closed' || st === 'resolved') cntClosed++;
+        else cntOpen++;
     });
 
-    if (matchingLink) {
-        matchingLink.classList.add('on');
-    } else if (el) {
-        el.classList.add('on');
+    const tabsRow = document.getElementById('tickets-tabs-row');
+    if (tabsRow) {
+        tabsRow.querySelectorAll('.tab').forEach(t => {
+            const st = t.getAttribute('data-status') || 'all';
+            if (st === statusTab) t.classList.add('on');
+            else t.classList.remove('on');
+        });
+        const tAll = tabsRow.querySelector('[data-status="all"]');
+        if (tAll) tAll.textContent = `All (${cntAll})`;
+        const tOpen = tabsRow.querySelector('[data-status="open"]');
+        if (tOpen) tOpen.textContent = `Open (${cntOpen})`;
+        const tClosed = tabsRow.querySelector('[data-status="closed"]');
+        if (tClosed) tClosed.textContent = `Closed (${cntClosed})`;
     }
 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-
-    // Automatically close mobile sidebar menu drawer on navigation
-    toggleMobileSidebar(false);
-
-    // Update clean URL path if not skipped
-    if (!skipHash) {
-        updateUrlPath(mainTabName);
-    }
-}
-
-function pfGoByName(name, skipHash) {
-    const link = Array.from(document.querySelectorAll('.pf-nav a')).find(a => a.getAttribute('onclick').includes("'" + name + "'"));
-    pfGo(name, link, skipHash);
-}
-
-function populateStatusDropdown(selectId, metaStatusList, datasetItems, getStatusFn) {
-    const select = document.getElementById(selectId);
-    if (!select) return;
-
-    select.replaceChildren(cel('option', { value: 'All', textContent: 'All' }));
-
-    const uniqueFromData = [...new Set((datasetItems || []).map(getStatusFn).filter(Boolean))];
-
-    const allStatuses = [];
-    if (Array.isArray(metaStatusList)) {
-        metaStatusList.forEach(st => {
-            if (st && !allStatuses.includes(st)) {
-                allStatuses.push(st);
-            }
+    // Filter Items
+    let items = rawTickets;
+    if (statusTab === 'open') {
+        items = items.filter(t => {
+            const st = getTicketDisplayStatus(t).toLowerCase();
+            return st !== 'closed' && st !== 'resolved';
+        });
+    } else if (statusTab === 'closed') {
+        items = items.filter(t => {
+            const st = getTicketDisplayStatus(t).toLowerCase();
+            return st === 'closed' || st === 'resolved';
         });
     }
 
-    uniqueFromData.forEach(st => {
-        if (st && !allStatuses.includes(st)) {
-            allStatuses.push(st);
-        }
-    });
-
-    allStatuses.forEach(st => {
-        select.appendChild(cel('option', { value: st, textContent: st }));
-    });
-}
-
-function goToPageWithFilter(pageName, statusVal) {
-    pfGoByName(pageName);
-
-    if (pageName === 'renewals') {
-        const renStatusSelect = document.getElementById('renewal-status-filter');
-        if (renStatusSelect) {
-            renStatusSelect.value = statusVal;
-            filterRenewals();
-        }
-    } else if (pageName === 'invoices') {
-        const invStatusSelect = document.getElementById('invoice-status-filter');
-        if (invStatusSelect) {
-            const hasOpt = Array.from(invStatusSelect.options).some(opt => opt.value === statusVal);
-            if (hasOpt) {
-                invStatusSelect.value = statusVal;
-            } else if (statusVal === 'Overdue' && Array.from(invStatusSelect.options).some(opt => opt.value === 'Overdue')) {
-                invStatusSelect.value = 'Overdue';
-            } else {
-                invStatusSelect.value = 'All';
-            }
-            filterInvoices();
-        }
-    } else if (pageName === 'support') {
-        const ticketStatusSelect = document.getElementById('ticket-status-filter');
-        if (ticketStatusSelect) {
-            const hasOpt = Array.from(ticketStatusSelect.options).some(opt => opt.value === statusVal);
-            if (hasOpt) {
-                ticketStatusSelect.value = statusVal;
-            } else {
-                ticketStatusSelect.value = 'All';
-            }
-            filterTickets();
-        }
-    }
-}
-
-function updateUrlPath(pathSegment) {
-    let cleanPath = '/customer-portal';
-    if (pathSegment && pathSegment !== 'overview') {
-        cleanPath += '/' + pathSegment;
-    }
-    if (window.location.pathname + window.location.hash !== cleanPath) {
-        if (history.pushState) {
-            history.pushState(null, null, cleanPath);
-        } else {
-            window.location.hash = '#' + pathSegment;
-        }
-    }
-}
-
-// Helper to construct secure elements using browser document APIs (No innerHTML, strictly XSS safe)
-function cel(tag, attrs = {}, children = []) {
-    const el = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) {
-        if (k === 'textContent' || k === 'innerText') {
-            el.textContent = v;
-        } else if (k === 'checked' || k === 'disabled' || k === 'selected' || k === 'readOnly') {
-            el[k] = Boolean(v);
-        } else if (k.startsWith('on') && typeof v === 'function') {
-            const eventName = k.substring(2).toLowerCase();
-            el.addEventListener(eventName, v);
-        } else {
-            el.setAttribute(k, v);
-        }
-    }
-    for (const child of children) {
-        if (typeof child === 'string') {
-            el.appendChild(document.createTextNode(child));
-        } else if (child) {
-            el.appendChild(child);
-        }
-    }
-    return el;
-}
-
-// Format helpers
-/* ==========================================================================
-   UNIVERSAL GLOBAL MODAL POPUP & ERROR INTERCEPTION SYSTEM
-   ========================================================================== */
-
-function showPortalModalPopup(message, title, type = 'error') {
-    if (!message) return;
-
-    let cleanMsg = message;
-    if (typeof cleanMsg === 'object') {
-        cleanMsg = cleanMsg.message || cleanMsg.error || JSON.stringify(cleanMsg);
+    if (search) {
+        items = items.filter(t => {
+            const dispSt = getTicketDisplayStatus(t);
+            const txt = `${t.name || ''} ${t.subject || ''} ${t.issue_type || ''} ${t.priority || ''} ${dispSt} ${t.raised_by || ''}`.toLowerCase();
+            return txt.includes(search);
+        });
     }
 
-    if (typeof cleanMsg === 'string') {
-        if (cleanMsg.startsWith('[')) {
-            try {
-                const arr = JSON.parse(cleanMsg);
-                cleanMsg = arr.map(item => {
-                    const parsed = typeof item === 'string' ? JSON.parse(item) : item;
-                    return parsed.message || item;
-                }).join('<br>');
-            } catch (e) { }
-        }
-        cleanMsg = cleanMsg.replace(/^<(p|div)>/i, '').replace(/<\/(p|div)>$/i, '');
+    const totalCount = items.length;
+    const limit = listState.tickets.limit || 10;
+    const visibleItems = items.slice(0, limit);
+
+    updateQueuePaginationUI('tickets', totalCount);
+
+    tbody.replaceChildren();
+
+    if (visibleItems.length === 0) {
+        tbody.appendChild(cel('tr', {}, [cel('td', { colspan: 4, style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No matching tickets found.'])]));
+        return;
     }
 
-    let overlay = document.getElementById('pf-global-modal-overlay');
-    if (!overlay) {
-        overlay = cel('div', { class: 'pf-modal-overlay', id: 'pf-global-modal-overlay' }, [
-            cel('div', { class: 'pf-modal-box' }, [
-                cel('button', { class: 'pf-modal-close-btn', onclick: closePortalModalPopup }, ['×']),
-                cel('div', { class: 'pf-modal-header', id: 'pf-global-modal-header' }, [
-                    cel('div', { class: 'pf-modal-icon-wrap error', id: 'pf-global-modal-icon-wrap' }, [
-                        cel('i', { class: 'ti ti-alert-triangle', id: 'pf-global-modal-icon' })
-                    ]),
-                    cel('h3', { class: 'pf-modal-title', id: 'pf-global-modal-title' }, ['Error'])
-                ]),
-                cel('div', { class: 'pf-modal-body', id: 'pf-global-modal-body' }),
-                cel('div', { class: 'pf-modal-footer' }, [
-                    cel('button', { class: 'pf-modal-btn primary', id: 'pf-global-modal-ok-btn', onclick: closePortalModalPopup }, ['OK'])
+    visibleItems.forEach(t => {
+        const dispStatus = getTicketDisplayStatus(t);
+        const statusClass = getTicketStatusClass(dispStatus);
+        const prioText = t.priority || '';
+        const prioKey = prioText.toLowerCase();
+
+        let prioClass = 'pill medium';
+        if (prioKey === 'high' || prioKey === 'urgent') prioClass = 'pill high';
+        else if (prioKey === 'low') prioClass = 'pill low';
+
+        const tr = cel('tr', { onclick: () => openTicketDetail(t) }, [
+            cel('td', {}, [
+                cel('div', { class: 'tbl-item-cell' }, [
+                    cel('div', { class: 'tbl-item-icon orange' }, [cel('i', { class: 'ti ti-ticket' })]),
+                    cel('div', {}, [
+                        cel('div', { class: 'tbl-item-title', textContent: t.subject }),
+                        cel('div', { class: 'tbl-item-sub', textContent: `#${t.name} • Created ${t.created_ago || (t.creation ? formatDate(t.creation) : 'recently')}` })
+                    ])
                 ])
+            ]),
+            cel('td', { style: 'vertical-align:middle;' }, [
+                cel('span', { class: prioClass }, [prioText])
+            ]),
+            cel('td', { style: 'vertical-align:middle;' }, [formatDate(t.creation)]),
+            cel('td', { style: 'vertical-align:middle;' }, [
+                cel('span', { class: `pill ${statusClass}` }, [dispStatus])
             ])
         ]);
-        document.body.appendChild(overlay);
-
-        overlay.addEventListener('click', function (e) {
-            if (e.target === overlay) closePortalModalPopup();
-        });
-        document.addEventListener('keydown', function (e) {
-            if (overlay.classList.contains('pf-modal-show') && (e.key === 'Escape' || e.key === 'Enter')) {
-                closePortalModalPopup();
-            }
-        });
-    }
-
-    const defaultTitle = type === 'success' ? 'Success' : (type === 'info' ? 'Notification' : 'Validation Error');
-    const titleEl = document.getElementById('pf-global-modal-title');
-    const bodyEl = document.getElementById('pf-global-modal-body');
-    const iconWrap = document.getElementById('pf-global-modal-icon-wrap');
-    const iconEl = document.getElementById('pf-global-modal-icon');
-
-    if (titleEl) titleEl.textContent = title || defaultTitle;
-    if (bodyEl) bodyEl.innerHTML = cleanMsg;
-
-    if (iconWrap && iconEl) {
-        iconWrap.className = 'pf-modal-icon-wrap ' + (type === 'success' ? 'success' : (type === 'info' ? 'info' : 'error'));
-        iconEl.className = type === 'success' ? 'ti ti-circle-check' : (type === 'info' ? 'ti ti-info-circle' : 'ti ti-alert-triangle');
-    }
-
-    overlay.style.display = 'flex';
-    overlay.offsetHeight; // force reflow
-    overlay.classList.add('pf-modal-show');
-
-    const okBtn = document.getElementById('pf-global-modal-ok-btn');
-    if (okBtn) setTimeout(() => okBtn.focus(), 100);
-}
-
-function closePortalModalPopup() {
-    const overlay = document.getElementById('pf-global-modal-overlay');
-    if (overlay) {
-        overlay.classList.remove('pf-modal-show');
-        setTimeout(() => {
-            overlay.style.display = 'none';
-        }, 250);
-    }
-}
-
-// Also support toast for non-blocking mini notifications
-function showPortalToast(message, type = 'error') {
-    const title = type === 'success' ? 'Success' : (type === 'info' ? 'Notification' : 'Validation Error');
-    showPortalModalPopup(message, title, type);
-}
-
-function extractFrappeErrorMessage(r) {
-    if (!r) return "An unexpected error occurred.";
-    let msg = "";
-
-    const serverMsgs = r._server_messages || (r.responseJSON && r.responseJSON._server_messages);
-    if (serverMsgs) {
-        try {
-            const parsedArray = typeof serverMsgs === 'string' ? JSON.parse(serverMsgs) : serverMsgs;
-            if (Array.isArray(parsedArray)) {
-                parsedArray.forEach(m => {
-                    const item = typeof m === 'string' ? JSON.parse(m) : m;
-                    if (item && item.message) {
-                        const cleanMsg = item.message.replace(/<[^>]*>/g, '').trim();
-                        if (cleanMsg) msg += (msg ? "\n<br>" : "") + cleanMsg;
-                    }
-                });
-            }
-        } catch (e) { }
-    }
-
-    if (!msg && r.exc) {
-        try {
-            const excArray = typeof r.exc === 'string' ? JSON.parse(r.exc) : r.exc;
-            if (Array.isArray(excArray) && excArray.length > 0) {
-                const lines = excArray[0].split('\n');
-                msg = lines[lines.length - 1] || excArray[0];
-            }
-        } catch (e) { }
-    }
-
-    if (!msg && typeof r.message === 'string') {
-        msg = r.message;
-    } else if (!msg && r.message && typeof r.message.error === 'string') {
-        msg = r.message.error;
-    }
-
-    if (!msg && r.responseText) {
-        try {
-            const resp = JSON.parse(r.responseText);
-            return extractFrappeErrorMessage(resp);
-        } catch (e) { }
-    }
-
-    return msg || "An error occurred while processing your request.";
-}
-
-// Reset any buttons showing 'Saving...', 'Submitting...', or disabled states
-function resetPortalLoadingButtons() {
-    document.querySelectorAll('button:disabled, .pf-btn:disabled').forEach(btn => {
-        btn.disabled = false;
-        if (btn.dataset && btn.dataset.origText) {
-            btn.innerHTML = btn.dataset.origText;
-        } else if (btn.innerHTML.includes('spin') || btn.textContent.includes('Saving') || btn.textContent.includes('Submitting')) {
-            btn.innerHTML = btn.innerHTML.replace(/<i class="ti ti-loader spin"><\/i>\s*/, '').replace('Saving...', 'Save Changes').replace('Submitting...', 'Submit');
-        }
+        tbody.appendChild(tr);
     });
 }
 
-// Override window.alert globally across all portal tabs
-window.alert = function (msg) {
-    if (!msg) return;
-    const isSuccess = typeof msg === 'string' && (msg.toLowerCase().includes('success') || msg.toLowerCase().includes('saved'));
-    showPortalModalPopup(msg, isSuccess ? 'Success' : 'Validation Notice', isSuccess ? 'success' : 'error');
-};
+function renderTicketProgressStepper(ticket) {
+    const container = document.getElementById('sd-stepper-container');
+    if (!container) return;
 
-// Override frappe.msgprint & frappe.show_alert globally
-if (typeof window.frappe === 'undefined') window.frappe = {};
+    // 7 Steppers requested: Created, Assigned, Open, Client Input, OEM Escalated, Resolved, Closed
+    const steps = [
+        { key: 'created', label: 'Created' },
+        { key: 'assigned', label: 'Assigned' },
+        { key: 'open', label: 'Open' },
+        { key: 'client_input', label: 'Client Input' },
+        { key: 'oem_escalated', label: 'OEM Escalated' },
+        { key: 'resolved', label: 'Resolved' },
+        { key: 'closed', label: 'Closed' }
+    ];
 
-window.frappe.msgprint = function (msg, title) {
-    resetPortalLoadingButtons();
-    let cleanMsg = extractFrappeErrorMessage({ _server_messages: msg }) || msg;
-    showPortalModalPopup(cleanMsg, title || 'Validation Error', 'error');
-};
+    const status = (ticket.status || '').toLowerCase();
 
-window.frappe.show_alert = function (msg) {
-    let text = typeof msg === 'object' ? (msg.message || JSON.stringify(msg)) : msg;
-    showPortalModalPopup(text, 'Notification', 'info');
-};
-
-// Global pending request set to prevent double-click / duplicate submission
-window.cpPendingCalls = window.cpPendingCalls || new Set();
-
-// Override / Intercept frappe.call globally
-if (typeof window.frappe !== 'undefined' && typeof window.frappe.call === 'function') {
-    const _origFrappeCall = window.frappe.call;
-    window.frappe.call = function (opts) {
-        if (!opts) return _origFrappeCall.apply(this, arguments);
-
-        // Compute request key to debounce rapid duplicate calls
-        const reqKey = opts.method ? `${opts.method}:${JSON.stringify(opts.args || {})}` : null;
-        if (reqKey && window.cpPendingCalls.has(reqKey)) {
-            console.warn("Duplicate frappe.call request debounced:", opts.method);
-            return;
-        }
-        if (reqKey) window.cpPendingCalls.add(reqKey);
-
-        const origCallback = opts.callback;
-        const origError = opts.error;
-
-        opts.callback = function (r) {
-            if (reqKey) window.cpPendingCalls.delete(reqKey);
-            // Remove any bottom-injected msgprint elements
-            document.querySelectorAll('#page-container > .msgprint, body > .msgprint, div.msgprint').forEach(el => el.remove());
-
-            if (r && r._server_messages) {
-                resetPortalLoadingButtons();
-                const errMsg = extractFrappeErrorMessage(r);
-                showPortalModalPopup(errMsg, 'Validation Error', 'error');
-                return;
-            }
-            if (origCallback) origCallback.apply(this, arguments);
-        };
-
-        opts.error = function (r) {
-            if (reqKey) window.cpPendingCalls.delete(reqKey);
-            resetPortalLoadingButtons();
-            document.querySelectorAll('#page-container > .msgprint, body > .msgprint, div.msgprint').forEach(el => el.remove());
-
-            const errMsg = extractFrappeErrorMessage(r);
-            showPortalModalPopup(errMsg || 'An error occurred while processing your request.', 'Error', 'error');
-            if (origError) origError.apply(this, arguments);
-        };
-
-        return _origFrappeCall.call(this, opts);
-    };
-}
-
-// Observe and delete any legacy msgprint elements injected at the bottom of the page
-if (typeof document !== 'undefined') {
-    document.addEventListener('DOMContentLoaded', function () {
-        const observer = new MutationObserver(mutations => {
-            mutations.forEach(m => {
-                m.addedNodes.forEach(node => {
-                    if (node.nodeType === 1) {
-                        if (node.classList.contains('msgprint') || node.classList.contains('web-error') || node.id === 'msgprint-dialog' || (node.classList.contains('alert') && node.classList.contains('alert-danger'))) {
-                            const text = node.textContent.trim();
-                            node.remove(); // Remove element from bottom of page
-                            if (text) {
-                                resetPortalLoadingButtons();
-                                showPortalModalPopup(text, 'Validation Error', 'error');
-                            }
-                        }
-                    }
-                });
-            });
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-    });
-}
-
-function formatCurrency(val) {
-    if (val === undefined || val === null) return '-';
-    return '₹' + Number(val).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-}
-
-// Safe date formatter
-function formatDate(dateStr) {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return dateStr;
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
-}
-
-function dateDiffInDays(a, b) {
-    const _MS_PER_DAY = 1000 * 60 * 60 * 24;
-    const utc1 = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
-    const utc2 = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
-    return Math.floor((utc2 - utc1) / _MS_PER_DAY);
-}
-
-// State & Rendering
-let portalData = null;
-
-function fetchPortalData(onComplete) {
-    frappe.call({
-        method: "customer_portal.api.get_portal_data",
-        callback: function (r) {
-            if (r.message) {
-                if (r.message.error) {
-                    console.error(r.message.error);
-                    alert(r.message.error);
-                    return;
-                }
-                portalData = r.message;
-                if (portalData && portalData.support && portalData.support.tickets) {
-                    portalData.tickets = portalData.support.tickets;
-                }
-                renderPortal();
-                if (typeof onComplete === 'function') {
-                    onComplete();
-                }
-            }
-        }
-    });
-}
-
-function renderEmptyState(message) {
-    return cel('div', { class: 'pf-empty' }, [
-        cel('i', { class: 'ti ti-info-circle' }),
-        cel('div', { class: 't', textContent: message })
-    ]);
-}
-
-function renderInvoiceRow(inv) {
-    const statusClass = getInvoiceStatusClass(inv.status);
-    const row = cel('div', { class: 'pf-row pf-row-clickable' }, [
-        cel('div', { class: 'pf-row-icon' }, [cel('i', { class: 'ti ti-file-invoice' })]),
-        cel('div', { class: 'pf-row-body' }, [
-            cel('div', { class: 'pf-row-title', textContent: inv.name }),
-            cel('div', { class: 'pf-row-sub', textContent: `Issued ${formatDate(inv.posting_date)} · Due ${formatDate(inv.due_date)}` })
-        ]),
-        cel('div', { class: 'pf-row-right' }, [
-            cel('div', { class: 'pf-row-amt', textContent: formatCurrency(inv.grand_total) }),
-            cel('span', { class: `pf-pill ${statusClass}`, textContent: inv.status }),
-            cel('span', { class: 'pf-row-chevron' }, [cel('i', { class: 'ti ti-chevron-right' })])
-        ])
-    ]);
-
-    row.addEventListener('click', (e) => {
-        // Prevent opening detail view if clicked directly on download button
-        if (e.target.closest('.pf-invoice-dl-btn')) return;
-        openInvoiceDetail(inv);
-    });
-    return row;
-}
-
-function getInvoiceStatusClass(status) {
-    if (!status) return 'closed';
-    status = status.toLowerCase();
-    if (status === 'paid') return 'paid';
-    if (status === 'overdue') return 'overdue';
-    if (status === 'unpaid') return 'due';
-    return 'closed';
-}
-
-function renderTicketRow(ticket) {
-    const statusClass = getTicketStatusClass(ticket.status);
-    const row = cel('div', { class: 'pf-row pf-row-clickable' }, [
-        cel('div', { class: 'pf-row-icon' }, [cel('i', { class: 'ti ti-headset' })]),
-        cel('div', { class: 'pf-row-body' }, [
-            cel('div', { class: 'pf-row-title', textContent: ticket.subject }),
-            cel('div', { class: 'pf-row-sub', textContent: `Ticket #${ticket.name} · Raised by ${ticket.raised_by || 'system'}` })
-        ]),
-        cel('div', { class: 'pf-row-right' }, [
-            cel('span', { class: `pf-pill ${statusClass}`, textContent: ticket.status }),
-            cel('span', { class: 'pf-row-chevron' }, [cel('i', { class: 'ti ti-chevron-right' })])
-        ])
-    ]);
-
-    row.addEventListener('click', () => openTicketDetail(ticket));
-    return row;
-}
-
-function getTicketStatusClass(status) {
-    if (!status) return 'closed';
-    status = status.toLowerCase();
-    if (status === 'open' || status === 'assigned') return 'open';
-    if (status === 'closed' || status === 'resolved') return 'closed';
-    return 'due';
-}
-
-function renderRenewalRow(ren) {
-    const statusClass = getRenewalStatusClass(ren.status);
-    const today = new Date();
-    const endDate = ren.end_date ? new Date(ren.end_date) : null;
-    const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : null;
-
-    // Days-left badge
-    let badgeEl = null;
-    if (daysLeft !== null) {
-        let badgeClass = 'pf-days-badge';
-        let badgeText = `${daysLeft}d left`;
-        if (daysLeft < 0) { badgeClass += ' expired'; badgeText = 'Expired'; }
-        else if (daysLeft <= 30) { badgeClass += ' urgent'; }
-        else if (daysLeft <= 90) { badgeClass += ' soon'; }
-        else { badgeClass += ' ok'; }
-        badgeEl = cel('span', { class: badgeClass, textContent: badgeText });
+    let activeIdx = 1;
+    if (status.includes('closed')) {
+        activeIdx = 7;
+    } else if (status.includes('resolve')) {
+        activeIdx = 6;
+    } else if (status.includes('oem') || status.includes('escalat')) {
+        activeIdx = 5;
+    } else if (status.includes('client') || status.includes('input') || status.includes('pending')) {
+        activeIdx = 4;
+    } else if (status.includes('progress') || status.includes('open') || status.includes('work')) {
+        activeIdx = 3;
+    } else if (ticket.assigned_to || ticket.working_agent || ticket.assigned_team || (ticket.assignees && ticket.assignees.length > 0)) {
+        activeIdx = 2;
+    } else {
+        activeIdx = 1;
     }
 
-    const row = cel('div', { class: 'pf-row pf-row-clickable' }, [
-        cel('div', { class: 'pf-row-icon pf-row-icon-renewal' }, [cel('i', { class: 'ti ti-refresh' })]),
-        cel('div', { class: 'pf-row-body' }, [
-            cel('div', { class: 'pf-row-title' }, [
-                document.createTextNode(ren.product_name || 'Unnamed Product'),
-                cel('span', { class: 'pf-renewal-id-tag', textContent: ren.name })
-            ]),
-            cel('div', { class: 'pf-row-sub' }, [
-                document.createTextNode(
-                    `${ren.total_quantity || 0} qty · ${formatDate(ren.start_date)} → ${formatDate(ren.end_date)}`
-                    + (ren.sales_user ? ` · ${ren.sales_user}` : '')
-                )
-            ])
-        ]),
-        cel('div', { class: 'pf-row-right' }, [
-            badgeEl,
-            cel('div', { class: 'pf-row-amt', textContent: formatCurrency(ren.total_amount) }),
-            cel('span', { class: `pf-pill ${statusClass}`, textContent: ren.status || '-' }),
-            cel('span', { class: 'pf-row-chevron' }, [cel('i', { class: 'ti ti-chevron-right' })])
-        ])
-    ]);
+    container.replaceChildren();
 
-    row.addEventListener('click', () => openRenewalDetail(ren));
-    return row;
-}
-
-function getRenewalStatusClass(status) {
-    if (!status) return 'closed';
-    status = status.toLowerCase();
-    if (status === 'active') return 'paid';
-    if (status === 'draft') return 'due';
-    if (status === 'lost') return 'overdue';
-    return 'closed';
-}
-
-function openRenewalDetail(ren, skipHash) {
-    const statusClass = getRenewalStatusClass(ren.status);
-    const setText = (id, val) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = val || '-';
-    };
-
-    // Header
-    setText('rd-name', ren.name);
-    setText('rd-product', ren.product_name);
-
-    // Status pill + amount (top-right)
-    const pill = document.getElementById('rd-status-pill');
-    if (pill) { pill.textContent = ren.status || '-'; pill.className = `pf-pill ${statusClass}`; }
-    setText('rd-amount', formatCurrency(ren.total_amount));
-    setText('rd-amount-hero', formatCurrency(ren.total_amount));
-
-    // Hero cards
-    setText('rd-start', formatDate(ren.start_date));
-    setText('rd-end', formatDate(ren.end_date));
-    setText('rd-qty', ren.total_quantity ? `${ren.total_quantity} qty` : '-');
-
-    // Detail grid
-    setText('rd-id', ren.name);
-    setText('rd-invoice', ren.invoice_no);
-    setText('rd-rate', ren.rate ? formatCurrency(ren.rate) + ' / seat' : '-');
-    setText('rd-company', ren.company);
-    setText('rd-sales-user', ren.sales_user || ren.renewal_owner);
-    setText('rd-owner', ren.renewal_owner);
-
-    // Optional fields — hide entire row if empty
-    const showOptional = (wrapId, valId, val) => {
-        const wrap = document.getElementById(wrapId);
-        if (wrap) wrap.style.display = val ? '' : 'none';
-        setText(valId, val);
-    };
-    showOptional('rd-domain-wrap', 'rd-domain', ren.domain_name);
-    showOptional('rd-opp-wrap', 'rd-opp', ren.opportunity_id);
-    showOptional('rd-sla-wrap', 'rd-sla', ren.sla_type || ren.sla_product || ren.sla);
-
-    // Description / Notes
-    const showSection = (wrapId, bodyId, val) => {
-        const wrap = document.getElementById(wrapId);
-        const body = document.getElementById(bodyId);
-        if (wrap) wrap.style.display = val ? '' : 'none';
-        if (body) setRichTextOrCleanHtml(body, val, '', true);
-    };
-    showSection('rd-desc-wrap', 'rd-desc', ren.description);
-    showSection('rd-note-wrap', 'rd-note', ren.note);
-
-    // Items Table
-    const itemsTbody = document.getElementById('rd-items-tbody');
-    const itemsCountEl = document.getElementById('rd-items-count');
-    if (itemsTbody) {
-        itemsTbody.replaceChildren();
-        let itemsToRender = ren.items || [];
-
-        // Fallback: If child table empty, construct item row from header
-        if (itemsToRender.length === 0 && (ren.product_name || ren.rate || ren.total_amount || ren.description)) {
-            itemsToRender = [{
-                item_code: ren.name || 'RENEWAL',
-                item_name: ren.product_name || 'Renewal Product',
-                description: ren.description || '',
-                qty: ren.total_quantity || 1,
-                rate: ren.rate || (ren.total_amount && ren.total_quantity ? ren.total_amount / ren.total_quantity : ren.total_amount),
-                amount: ren.total_amount || 0,
-                start_date: ren.start_date,
-                end_date: ren.end_date,
-                status: ren.status
-            }];
-        }
-
-        if (itemsCountEl) itemsCountEl.textContent = itemsToRender.length;
-
-        if (itemsToRender.length === 0) {
-            const tr = cel('tr', {}, [
-                cel('td', { colspan: '5', style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No items listed for this renewal.'])
-            ]);
-            itemsTbody.appendChild(tr);
-        } else {
-            itemsToRender.forEach(it => {
-                const periodStr = (it.start_date || it.end_date)
-                    ? `${formatDate(it.start_date)} → ${formatDate(it.end_date)}`
-                    : '-';
-
-                const itemDesc = it.description || ren.description || '';
-
-                const tr = cel('tr', {}, [
-                    cel('td', {}, [
-                        cel('div', { class: 'pf-item-title', textContent: it.item_name || it.item_code || 'Product Item' }),
-                        it.item_code ? cel('span', { class: 'pf-item-code-tag', textContent: it.item_code }) : null,
-                        createItemDescNode(itemDesc)
-                    ]),
-                    cel('td', { style: 'text-align:center;font-weight:600;' }, [String(it.qty || 1)]),
-                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(it.rate)]),
-                    cel('td', { style: 'text-align:right;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;' }, [formatCurrency(it.amount)]),
-                    cel('td', { style: 'text-align:center;font-size:12px;color:var(--ink-soft);' }, [periodStr])
-                ]);
-                itemsTbody.appendChild(tr);
-            });
-        }
-    }
-
-    // Renewal countdown progress bar
-    const today = new Date();
-    const startDate = ren.start_date ? new Date(ren.start_date) : null;
-    const endDate = ren.end_date ? new Date(ren.end_date) : null;
-    const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : null;
-    const totalDays = (startDate && endDate)
-        ? Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) : null;
-
-    const daysLeftEl = document.getElementById('rd-days-left');
-    const daysLabelEl = document.getElementById('rd-days-label');
-    const barEl = document.getElementById('rd-progress-bar');
-
-    if (daysLeft !== null && daysLeftEl) {
-        if (daysLeft < 0) {
-            daysLeftEl.textContent = 'Expired';
-            daysLeftEl.style.color = 'var(--red)';
-            if (daysLabelEl) daysLabelEl.textContent = `${Math.abs(daysLeft)} days ago`;
-        } else {
-            daysLeftEl.textContent = daysLeft;
-            daysLeftEl.style.color = daysLeft <= 30 ? 'var(--red)' : daysLeft <= 90 ? 'var(--amber)' : 'var(--green)';
-            if (daysLabelEl) daysLabelEl.textContent = 'days until renewal';
-        }
-    }
-
-    if (barEl && totalDays && totalDays > 0) {
-        const elapsed = totalDays - (daysLeft || 0);
-        const pct = Math.min(100, Math.max(0, (elapsed / totalDays) * 100));
-        barEl.style.width = pct + '%';
-        barEl.style.background = daysLeft <= 30 ? 'var(--red)' : daysLeft <= 90 ? 'var(--amber)' : 'var(--indigo)';
-    }
-
-    setText('rd-tl-start', formatDate(ren.start_date));
-    setText('rd-tl-end', formatDate(ren.end_date));
-
-    // Navigate to detail page & update hash
-    pfGo('renewal-detail', null, true);
-    if (!skipHash && ren && ren.name) {
-        updateUrlPath('renewals/' + encodeURIComponent(ren.name));
-    }
-}
-
-
-function renderContactRow(contact) {
-    const fullName = `${contact.first_name || ''} ${contact.last_name || ''}`.trim() || contact.name;
-    const designation = contact.designation || 'Contact';
-    const detailText = `${contact.email_id || '-'} · ${contact.mobile_no || contact.phone || '-'}`;
-    const isTpoc = (contact.tpoc || contact.custom_tpoc) ? true : false;
-
-    const editBtn = cel('button', {
-        type: 'button',
-        class: 'pf-btn btn-sm',
-        style: 'margin-right:8px;padding:4px 10px;font-size:12px;background:var(--surface-2, #f8fafc);color:var(--indigo, #4f46e5);border:1px solid var(--line, #cbd5e1);',
-        title: 'Edit Contact',
-        onclick: (e) => {
-            e.stopPropagation();
-            openContactWizModal(contact.name || contact.id);
-        }
-    }, [
-        cel('i', { class: 'ti ti-pencil', style: 'margin-right:4px;' }),
-        document.createTextNode("Edit")
-    ]);
-
-    const row = cel('div', { class: 'pf-row pf-row-clickable' }, [
-        cel('div', { class: 'pf-row-icon' }, [cel('i', { class: 'ti ti-user' })]),
-        cel('div', { class: 'pf-row-body' }, [
-            cel('div', { class: 'pf-row-title', textContent: fullName }),
-            cel('div', { class: 'pf-row-sub', textContent: `${detailText} · ${designation}` })
-        ]),
-        cel('div', { class: 'pf-row-right', style: 'display:flex;align-items:center;' }, [
-            isTpoc ? cel('span', { class: 'pf-pill paid', style: 'margin-right:6px;background:#dcfce7;color:#15803d;', textContent: 'TPOC' }) : null,
-            contact.is_primary_contact ? cel('span', { class: 'pf-pill paid', style: 'margin-right:6px;', textContent: 'Primary' }) : null,
-            editBtn,
-            cel('span', { class: 'pf-row-chevron' }, [cel('i', { class: 'ti ti-chevron-right' })])
-        ])
-    ]);
-
-    row.addEventListener('click', () => openContactDetail(contact));
-    return row;
-}
-
-function renderOrderSection(order) {
-    const steps = ["Placed", "Confirmed", "Processing", "Shipped", "Delivered"];
-    let currentStepIndex = 1;
-    if (order.status === "To Deliver and Bill" || order.status === "To Deliver") {
-        currentStepIndex = 2;
-    } else if (order.delivery_status === "Partially Delivered") {
-        currentStepIndex = 3;
-    } else if (order.delivery_status === "Fully Delivered") {
-        currentStepIndex = 4;
-    } else if (order.status === "Completed") {
-        currentStepIndex = 5;
-    }
-
-    const trackDiv = cel('div', { class: 'pf-track' });
     steps.forEach((step, idx) => {
-        const stepClass = idx < currentStepIndex ? "pf-step done" : (idx === currentStepIndex ? "pf-step now" : "pf-step");
-        const dotContent = idx < currentStepIndex ? cel('i', { class: 'ti ti-check' }) : document.createTextNode(String(idx + 1));
+        const stepNum = idx + 1;
+        const isCompleted = stepNum < activeIdx || (stepNum === 7 && activeIdx === 7);
+        const isActive = stepNum === activeIdx;
 
-        trackDiv.appendChild(cel('div', { class: stepClass }, [
-            cel('div', { class: 'pf-dot' }, [dotContent]),
-            cel('div', { class: 'l', textContent: step })
-        ]));
+        let statusClass = '';
+        if (isCompleted) statusClass = 'completed';
+        else if (isActive) statusClass = 'active';
+
+        const stepItem = document.createElement('div');
+        stepItem.className = `tkt-step-item ${statusClass}`;
+
+        const iconContent = isCompleted ? '<i class="ti ti-check"></i>' : stepNum;
+
+        let stepTime = '';
+        if (stepNum === 1 && ticket.creation) {
+            stepTime = formatDate(ticket.creation);
+        } else if (isActive && ticket.modified) {
+            stepTime = formatDate(ticket.modified);
+        }
+
+        stepItem.innerHTML = `
+            <div class="tkt-step-line"></div>
+            <div class="tkt-step-icon">${iconContent}</div>
+            <div class="tkt-step-label">${step.label}</div>
+            <div class="tkt-step-time">${stepTime}</div>
+        `;
+
+        container.appendChild(stepItem);
     });
-
-    const estText = order.status === "Completed" ? `Delivered ${formatDate(order.delivery_date || order.modified)}` : `Expected to ship by ${formatDate(order.delivery_date) || 'soon'}`;
-    const statusPill = order.status === "Completed" ? cel('span', { class: 'pf-pill paid', textContent: 'Delivered' }) : cel('span', { class: 'pf-pill open', textContent: order.status });
-
-    const sec = cel('div', { class: 'pf-section pf-row-clickable' }, [
-        cel('div', { class: 'pf-section-head' }, [
-            cel('h3', { textContent: `Order #${order.name}` }),
-            cel('div', { style: 'display:flex;align-items:center;gap:10px;' }, [
-                statusPill,
-                cel('a', { textContent: 'View details' })
-            ])
-        ]),
-        trackDiv,
-        cel('div', { style: 'padding:6px 18px 16px;font-size:12px;color:var(--ink-soft);', textContent: estText })
-    ]);
-
-    sec.addEventListener('click', () => openOrderDetail(order));
-    return sec;
 }
 
-// ==========================================
-// DETAIL PAGE OPENER FUNCTIONS
-// ==========================================
+function renderTicketHappeningNow(ticket) {
+    const textEl = document.getElementById('sd-happening-now-text');
+    if (!textEl) return;
 
-function openInvoiceDetail(inv, skipHash) {
-    const statusClass = getInvoiceStatusClass(inv.status);
-    const setText = (id, val) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = val || '-';
-    };
+    const status = (ticket.status || '').toLowerCase();
 
-    setText('id-name', inv.name);
-    setText('id-sub', `Issued ${formatDate(inv.posting_date)} · Due ${formatDate(inv.due_date)}`);
+    if (status.includes('closed')) {
+        textEl.textContent = 'This ticket has been closed. Thank you for using our support service.';
+    } else if (status.includes('resolve')) {
+        textEl.textContent = 'Our support team has provided a resolution for your ticket.';
+    } else if (status.includes('oem') || status.includes('escalat')) {
+        textEl.textContent = 'Your ticket has been escalated to our specialized OEM technical partners for detailed resolution.';
+    } else if (status.includes('client') || status.includes('input') || status.includes('pending')) {
+        textEl.textContent = 'Our support team is awaiting additional information/input from you to proceed.';
+    } else if (status.includes('progress') || status.includes('open')) {
+        textEl.textContent = 'Our technical support team is actively checking the ticket configuration and working on resolution.';
+    } else {
+        textEl.textContent = 'Your ticket has been logged and assigned to our technical support team for initial analysis.';
+    }
+}
 
-    const pill = document.getElementById('id-status-pill');
-    if (pill) { pill.textContent = inv.status || '-'; pill.className = `pf-pill ${statusClass}`; }
+function renderTicketConversation(communications, ticket) {
+    const convoEl = document.getElementById('sd-conversation-list');
+    if (!convoEl) return;
 
-    setText('id-amount', formatCurrency(inv.grand_total));
-    setText('id-posting-date', formatDate(inv.posting_date));
-    setText('id-due-date', formatDate(inv.due_date));
-    setText('id-grand-total', formatCurrency(inv.grand_total));
-    setText('id-outstanding', formatCurrency(inv.outstanding_amount));
+    convoEl.replaceChildren();
 
-    setText('id-number', inv.name);
-    setText('id-company', inv.company || '-');
-    setText('id-currency', inv.currency || 'INR');
+    const comms = Array.isArray(communications) && communications.length > 0 ? communications : (ticket && ticket.comments ? ticket.comments : []);
 
-    const remarksWrap = document.getElementById('id-remarks-wrap');
-    const remarksEl = document.getElementById('id-remarks');
-    if (remarksWrap && remarksEl) {
-        remarksWrap.style.display = inv.remarks ? '' : 'none';
-        setRichTextOrCleanHtml(remarksEl, inv.remarks, '');
+    if (ticket && ticket.description) {
+        const userMsg = document.createElement('div');
+        userMsg.className = 'tkt-convo-item';
+        const senderName = ticket.person_name || ticket.raised_by_details?.full_name || portalData.customer_info?.customer_name || 'You';
+        const initials = getInitials(senderName);
+
+        userMsg.innerHTML = `
+            <div class="tkt-convo-avatar">${initials}</div>
+            <div class="tkt-convo-body">
+                <div class="tkt-convo-header">
+                    <span class="tkt-convo-author">${safeEscape(senderName)} (Author)</span>
+                    <span class="tkt-convo-time">${formatDate(ticket.creation)}</span>
+                </div>
+                <div class="tkt-convo-bubble">${ticket.description}</div>
+            </div>
+        `;
+        convoEl.appendChild(userMsg);
     }
 
-    // Attach Download PDF listener
-    const dlBtn = document.getElementById('id-download-btn');
-    if (dlBtn) {
-        dlBtn.onclick = (e) => {
-            e.stopPropagation();
-            dlBtn.disabled = true;
-            dlBtn.querySelector('i').className = 'ti ti-loader-2';
-            dlBtn.style.animation = 'spin 1s linear infinite';
-            frappe.call({
-                method: 'customer_portal.api.download_invoice_pdf',
-                args: { invoice_name: inv.name },
-                callback: function (r) {
-                    dlBtn.disabled = false;
-                    dlBtn.querySelector('i').className = 'ti ti-printer';
-                    dlBtn.style.animation = '';
-                    if (r.message && r.message.pdf_b64) {
-                        const b64 = r.message.pdf_b64;
-                        const binary = atob(b64);
-                        const bytes = new Uint8Array(binary.length);
-                        for (let i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
-                        const blob = new Blob([bytes], { type: 'application/pdf' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = r.message.filename || (inv.name + '.pdf');
-                        a.target = '_blank';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        setTimeout(() => URL.revokeObjectURL(url), 5000);
-                    } else {
-                        frappe.msgprint('Could not generate invoice PDF. Please try again.');
-                    }
-                },
-                error: function () {
-                    dlBtn.disabled = false;
-                    dlBtn.querySelector('i').className = 'ti ti-printer';
-                    dlBtn.style.animation = '';
-                    frappe.msgprint('Failed to download invoice PDF.');
-                }
+    if (!comms.length && (!ticket || !ticket.description)) {
+        convoEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--ink-soft);font-size:13px;">No message history recorded yet.</div>';
+        return;
+    }
+
+    comms.forEach(c => {
+        const isCustomer = c.sender === portalData.customer_info?.email || c.sender === frappe.session.user || (c.sender_full_name && (c.sender_full_name.includes('(You)') || c.sender_full_name === portalData.customer_info?.customer_name));
+        const authorName = c.sender_full_name || c.sender || (isCustomer ? 'You' : 'Technical Support Team');
+        const initials = getInitials(authorName);
+        let bubbleContent = c.content || c.description || c.subject || '';
+
+        if (bubbleContent.includes('href=') && (bubbleContent.includes('.png') || bubbleContent.includes('.jpg') || bubbleContent.includes('.jpeg') || bubbleContent.includes('.webp') || bubbleContent.includes('.gif'))) {
+            bubbleContent = bubbleContent.replace(/<a href="([^"]+\.(?:png|jpg|jpeg|webp|gif))"[^>]*>(.*?)<\/a>/gi, function (match, imgUrl, text) {
+                return `
+                    <div style="margin-top:6px;">
+                        <a href="${imgUrl}" target="_blank" style="display:inline-block;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;max-width:260px;max-height:180px;">
+                            <img src="${imgUrl}" alt="Attachment" style="max-width:100%;height:auto;display:block;">
+                        </a>
+                        <div style="margin-top:4px;font-size:11.5px;"><a href="${imgUrl}" target="_blank" style="color:var(--indigo);font-weight:600;">${text || '📎 View Image'}</a></div>
+                    </div>
+                `;
             });
-        };
+        }
+
+        const msgItem = document.createElement('div');
+        msgItem.className = 'tkt-convo-item';
+        msgItem.innerHTML = `
+            <div class="tkt-convo-avatar ${isCustomer ? '' : 'support'}">${initials}</div>
+            <div class="tkt-convo-body">
+                <div class="tkt-convo-header">
+                    <span class="tkt-convo-author">${safeEscape(authorName)} ${isCustomer ? '(You)' : ''}</span>
+                    <span class="tkt-convo-time">${formatDate(c.creation || c.timestamp)}</span>
+                </div>
+                <div class="tkt-convo-bubble">${bubbleContent}</div>
+            </div>
+        `;
+        convoEl.appendChild(msgItem);
+    });
+}
+
+function tdPageTab(tabEl, panelId) {
+    document.querySelectorAll('.td-page-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.td-page-panel').forEach(p => p.classList.remove('active'));
+    if (tabEl) {
+        tabEl.classList.add('active');
+    }
+    const panel = document.getElementById(panelId);
+    if (panel) {
+        panel.classList.add('active');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function scrollToReplyBox() {
+    tdPageTab(document.querySelector('.td-page-tab'), 'tab-overview');
+    const input = document.getElementById('sd-reply-input');
+    if (input) {
+        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        input.focus();
+    }
+}
+
+function renderTicketSLA(ticket) {
+    const expectedResEl = document.getElementById('sd-expected-resolution');
+    const slaStatusBadge = document.getElementById('sd-sla-status-badge');
+    const progressPctEl = document.getElementById('sd-sla-progress-pct');
+    const gaugeCircle = document.getElementById('sd-sla-gauge-circle');
+    const responseSlaVal = document.getElementById('sd-response-sla-val');
+    const resolutionSlaVal = document.getElementById('sd-resolution-sla-val');
+    const responseBox = document.getElementById('sd-response-sla-box');
+    const resolutionBox = document.getElementById('sd-resolution-sla-box');
+
+    if (!ticket) return;
+
+    const status = (ticket.status || '').toLowerCase();
+    const isResolved = status.includes('closed') || status.includes('resolve') || ticket.resolution_date;
+    const resolutionTarget = ticket.resolution_by || ticket.sla_resolution_by;
+    const responseTarget = ticket.response_by || ticket.sla_t1;
+    const creationTime = ticket.creation ? new Date(ticket.creation).getTime() : null;
+    const now = Date.now();
+
+    // Overdue check
+    let isResolutionOverdue = false;
+    if (!isResolved && resolutionTarget) {
+        const targetMs = new Date(resolutionTarget).getTime();
+        if (!isNaN(targetMs) && now > targetMs) {
+            isResolutionOverdue = true;
+        }
     }
 
-    // Render Invoice Items
-    const itemsTbody = document.getElementById('id-items-tbody');
-    const itemsCountEl = document.getElementById('id-items-count');
-    if (itemsTbody) {
-        itemsTbody.replaceChildren();
-        const items = inv.items || [];
-        if (itemsCountEl) itemsCountEl.textContent = items.length;
+    let isResponseOverdue = false;
+    const hasResponded = ticket.first_responded_on || ticket.working_agent || ticket.assigned_to || (ticket.assignees && ticket.assignees.length > 0) || status !== 'open';
+    if (!hasResponded && responseTarget) {
+        const respMs = new Date(responseTarget).getTime();
+        if (!isNaN(respMs) && now > respMs) {
+            isResponseOverdue = true;
+        }
+    }
 
-        if (items.length === 0) {
-            itemsTbody.appendChild(cel('tr', {}, [
-                cel('td', { colspan: '4', style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No item details listed for this invoice.'])
-            ]));
+    const agreementStatus = (ticket.agreement_status || '').toLowerCase();
+    const isBreached = isResolutionOverdue || isResponseOverdue || agreementStatus.includes('failed') || agreementStatus.includes('breach') || agreementStatus.includes('overdue');
+
+    // Expected resolution text
+    if (expectedResEl) {
+        if (resolutionTarget) {
+            expectedResEl.textContent = formatDate(resolutionTarget);
+        } else if (isResolved && ticket.resolution_date) {
+            expectedResEl.textContent = formatDate(ticket.resolution_date);
         } else {
-            items.forEach(it => {
-                itemsTbody.appendChild(cel('tr', {}, [
-                    cel('td', {}, [
-                        cel('div', { class: 'pf-item-title', textContent: it.item_name || it.item_code }),
-                        it.item_code ? cel('span', { class: 'pf-item-code-tag', textContent: it.item_code }) : null,
-                        createItemDescNode(it.description)
-                    ]),
-                    cel('td', { style: 'text-align:center;font-weight:600;' }, [String(it.qty || 1)]),
-                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(it.rate)]),
-                    cel('td', { style: 'text-align:right;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;' }, [formatCurrency(it.amount)])
-                ]));
-            });
+            expectedResEl.textContent = 'Not specified';
         }
     }
 
-    pfGo('invoice-detail', null, true);
-    if (!skipHash && inv && inv.name) {
-        updateUrlPath('invoices/' + encodeURIComponent(inv.name));
-    }
-}
-
-function openOrderDetail(order, skipHash) {
-    const setText = (id, val) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = val || '-';
-    };
-
-    setText('od-name', `Order #${order.name}`);
-    setText('od-sub', `Placed on ${formatDate(order.transaction_date)}`);
-
-    const pill = document.getElementById('od-status-pill');
-    if (pill) { pill.textContent = order.status || '-'; pill.className = 'pf-pill open'; }
-
-    setText('od-amount', formatCurrency(order.grand_total));
-    setText('od-date', formatDate(order.transaction_date));
-    setText('od-delivery-date', formatDate(order.delivery_date) || 'Soon');
-    setText('od-total', formatCurrency(order.grand_total));
-    setText('od-deliv-status', order.delivery_status || order.status);
-
-    setText('od-number', order.name);
-    setText('od-company', order.company || '-');
-    setText('od-status-val', order.status || '-');
-
-    // Render Order Tracker
-    const trackDiv = document.getElementById('od-track');
-    const trackFooter = document.getElementById('od-track-footer');
-    if (trackDiv) {
-        trackDiv.replaceChildren();
-        const steps = ["Placed", "Confirmed", "Processing", "Shipped", "Delivered"];
-        let currentStepIndex = 1;
-        if (order.status === "To Deliver and Bill" || order.status === "To Deliver") currentStepIndex = 2;
-        else if (order.delivery_status === "Partially Delivered") currentStepIndex = 3;
-        else if (order.delivery_status === "Fully Delivered") currentStepIndex = 4;
-        else if (order.status === "Completed") currentStepIndex = 5;
-
-        steps.forEach((step, idx) => {
-            const stepClass = idx < currentStepIndex ? "pf-step done" : (idx === currentStepIndex ? "pf-step now" : "pf-step");
-            const dotContent = idx < currentStepIndex ? cel('i', { class: 'ti ti-check' }) : document.createTextNode(String(idx + 1));
-            trackDiv.appendChild(cel('div', { class: stepClass }, [
-                cel('div', { class: 'pf-dot' }, [dotContent]),
-                cel('div', { class: 'l', textContent: step })
-            ]));
-        });
-
-        if (trackFooter) {
-            trackFooter.textContent = order.status === "Completed"
-                ? `Delivered ${formatDate(order.delivery_date || order.modified)}`
-                : `Expected to ship by ${formatDate(order.delivery_date) || 'soon'}`;
-        }
-    }
-
-    // Render Ordered Items
-    const itemsTbody = document.getElementById('od-items-tbody');
-    const itemsCountEl = document.getElementById('od-items-count');
-    if (itemsTbody) {
-        itemsTbody.replaceChildren();
-        const items = order.items || [];
-        if (itemsCountEl) itemsCountEl.textContent = items.length;
-
-        if (items.length === 0) {
-            itemsTbody.appendChild(cel('tr', {}, [
-                cel('td', { colspan: '5', style: 'text-align:center;color:var(--ink-soft);padding:18px;' }, ['No items listed for this order.'])
-            ]));
+    // Donut Gauge % Calculation (from 0% at creation time to 100% at SLA resolution deadline)
+    let pct = 0;
+    if (isResolved) {
+        pct = 100;
+    } else if (isResolutionOverdue || isBreached) {
+        pct = 100;
+    } else if (creationTime && resolutionTarget) {
+        const targetMs = new Date(resolutionTarget).getTime();
+        if (!isNaN(targetMs) && targetMs > creationTime) {
+            const elapsed = Math.max(0, now - creationTime);
+            const total = targetMs - creationTime;
+            pct = Math.min(Math.round((elapsed / total) * 100), 100);
         } else {
-            items.forEach(it => {
-                itemsTbody.appendChild(cel('tr', {}, [
-                    cel('td', {}, [
-                        cel('div', { class: 'pf-item-title', textContent: it.item_name || it.item_code }),
-                        it.item_code ? cel('span', { class: 'pf-item-code-tag', textContent: it.item_code }) : null,
-                        createItemDescNode(it.description)
-                    ]),
-                    cel('td', { style: 'text-align:center;font-weight:600;' }, [String(it.qty || 1)]),
-                    cel('td', { style: 'text-align:center;color:var(--green);font-weight:600;' }, [String(it.delivered_qty || 0)]),
-                    cel('td', { style: 'text-align:right;font-weight:600;font-variant-numeric:tabular-nums;' }, [formatCurrency(it.rate)]),
-                    cel('td', { style: 'text-align:right;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;' }, [formatCurrency(it.amount)])
-                ]));
-            });
+            pct = 0;
+        }
+    } else {
+        pct = 0;
+    }
+
+    // Dynamic Status Color & Badge State
+    let statusColor = 'var(--td-cyan, #0f7fb8)';
+    let badgeText = 'WITHIN SLA';
+    let badgeClass = 'td-sla-badge';
+
+    if (isResolved) {
+        statusColor = 'var(--td-green, #10b981)';
+        badgeText = 'RESOLVED';
+        badgeClass = 'td-sla-badge';
+    } else if (isBreached || isResolutionOverdue || pct >= 100) {
+        statusColor = 'var(--td-red, #d13a58)';
+        badgeText = 'SLA BREACHED';
+        badgeClass = 'td-sla-badge breached';
+    } else if (pct >= 75) {
+        statusColor = 'var(--td-amber, #c96f0a)';
+        badgeText = 'NEAR SLA';
+        badgeClass = 'td-sla-badge warning';
+    } else {
+        statusColor = 'var(--td-cyan, #0f7fb8)';
+        badgeText = 'WITHIN SLA';
+        badgeClass = 'td-sla-badge';
+    }
+
+    // Badge
+    if (slaStatusBadge) {
+        slaStatusBadge.textContent = badgeText;
+        slaStatusBadge.className = badgeClass;
+    }
+
+    if (progressPctEl) {
+        progressPctEl.textContent = `${pct}%`;
+        progressPctEl.style.color = statusColor;
+    }
+
+    if (gaugeCircle) {
+        const dashOffset = 201 * (1 - pct / 100);
+        gaugeCircle.style.strokeDashoffset = Math.max(0, dashOffset);
+        gaugeCircle.style.stroke = statusColor;
+    }
+
+    // Response Box
+    if (responseSlaVal) {
+        if (hasResponded) {
+            responseSlaVal.innerHTML = `<i class="ti ti-check" style="color:var(--td-green, #10b981);"></i> Completed`;
+            if (responseBox) responseBox.className = 'v done';
+        } else if (isResponseOverdue) {
+            responseSlaVal.innerHTML = `<i class="ti ti-alert-circle" style="color:var(--td-red, #ef4444);"></i> Overdue (${formatDate(responseTarget)})`;
+            if (responseBox) responseBox.className = 'v pending';
+        } else if (responseTarget) {
+            responseSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> Due ${formatDate(responseTarget)}`;
+            if (responseBox) responseBox.className = 'v pending';
+        } else {
+            responseSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> In Progress`;
+            if (responseBox) responseBox.className = 'v pending';
         }
     }
 
-    pfGo('order-detail', null, true);
-    if (!skipHash && order && order.name) {
-        updateUrlPath('orders/' + encodeURIComponent(order.name));
+    // Resolution Box
+    if (resolutionSlaVal) {
+        if (isResolved) {
+            resolutionSlaVal.innerHTML = `<i class="ti ti-check" style="color:var(--td-green, #10b981);"></i> Completed`;
+            if (resolutionBox) resolutionBox.className = 'v done';
+        } else if (isResolutionOverdue) {
+            resolutionSlaVal.innerHTML = `<i class="ti ti-alert-circle" style="color:var(--td-red, #ef4444);"></i> Overdue (${formatDate(resolutionTarget)})`;
+            if (resolutionBox) resolutionBox.className = 'v pending';
+        } else if (resolutionTarget) {
+            resolutionSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> Due ${formatDate(resolutionTarget)}`;
+            if (resolutionBox) resolutionBox.className = 'v pending';
+        } else {
+            resolutionSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> In Progress`;
+            if (resolutionBox) resolutionBox.className = 'v pending';
+        }
     }
 }
-
-let currentPortalTicketName = null;
 
 function openTicketDetail(ticket, skipHash) {
-    if (!ticket) return;
-    window.currentPortalTicketName = ticket.name;
+    currentTicket = ticket;
+    window.currentPortalTicketName = ticket ? ticket.name : null;
 
-    // Clear stale cached version in Frappe client framework memory
-    if (window.frappe && frappe.model && ticket.name) {
-        if (typeof frappe.model.clear_doc === 'function') {
-            frappe.model.clear_doc("Issue", ticket.name);
+    // Reset or preserve active tab
+    const activeTabEl = document.querySelector('.td-page-tab.active');
+    const activePanelId = activeTabEl ? (activeTabEl.getAttribute('onclick')?.match(/'([^']+)'/)?.[1] || 'tab-overview') : 'tab-overview';
+    if (!skipHash) {
+        tdPageTab(document.querySelector('.td-page-tab'), 'tab-overview');
+    } else {
+        const currentTab = document.querySelector(`.td-page-tab[onclick*="${activePanelId}"]`);
+        if (currentTab) tdPageTab(currentTab, activePanelId);
+    }
+
+    const setText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val || '-';
+    };
+
+    const updateStatusPillsAndBadges = (t) => {
+        const dispStatus = getTicketDisplayStatus(t);
+        const statusClass = getTicketStatusClass(dispStatus);
+
+        const statusPill = document.getElementById('sd-status-pill');
+        if (statusPill) {
+            statusPill.textContent = dispStatus;
         }
-        if (window.locals && locals["Issue"] && locals["Issue"][ticket.name]) {
-            delete locals["Issue"][ticket.name];
+
+        const statusLed = document.getElementById('sd-status-led');
+        if (statusLed) {
+            statusLed.className = 'td-led';
+            if (statusClass.includes('green') || statusClass.includes('closed') || statusClass.includes('resolved')) {
+                statusLed.classList.add('green');
+            } else if (statusClass.includes('cyan') || statusClass.includes('progress')) {
+                statusLed.classList.add('cyan');
+            } else if (statusClass.includes('red') || statusClass.includes('escalat')) {
+                statusLed.classList.add('red');
+            }
         }
-    }
+    };
 
-    pfGo('support-detail', null, true);
-    if (!skipHash && ticket && ticket.name) {
-        updateUrlPath('support/' + encodeURIComponent(ticket.name));
-    }
+    updateStatusPillsAndBadges(ticket);
 
-    setText('sd-subject', ticket.subject || 'Support Ticket');
-
-    // Status & Header Badges
-    const statusPill = document.getElementById('sd-status-pill');
-    if (statusPill) {
-        statusPill.textContent = ticket.status || 'Open';
-        statusPill.className = 'pf-badge p-status ' + (ticket.status || '').toLowerCase().replace(/\s+/g, '-');
-    }
+    setText('sd-ticket-id', ticket.name || '');
+    setText('sd-subject', ticket.subject || '');
+    setText('sd-created', formatDate(ticket.creation));
+    setText('sd-updated', formatDate(ticket.modified || ticket.creation));
+    setText('sd-salesperson', ticket.sales_person || ticket.sales_person_details?.full_name);
+    setText('sd-workingagent', ticket.working_agent_name || ticket.working_agent);
 
     const priorityPill = document.getElementById('sd-priority-pill');
     if (priorityPill) {
-        if (ticket.priority) {
-            priorityPill.textContent = ticket.priority;
-            priorityPill.style.display = 'inline-flex';
-        } else {
-            priorityPill.style.display = 'none';
-        }
+        priorityPill.textContent = `${ticket.priority || 'Medium'}`;
     }
 
-    const categoryPill = document.getElementById('sd-category-pill');
-    if (categoryPill) {
-        const catVal = ticket.custom_query_type || ticket.category || ticket.issue_type;
-        if (catVal && String(catVal).trim()) {
-            categoryPill.textContent = String(catVal).trim();
-            categoryPill.style.display = 'inline-flex';
-        } else {
-            categoryPill.style.display = 'none';
-        }
-    }
-
-    const suppTypePill = document.getElementById('sd-support-type-pill');
-    if (suppTypePill) {
-        const suppVal = ticket.custom_support_type || ticket.support_type;
-        if (suppVal && String(suppVal).trim()) {
-            suppTypePill.textContent = String(suppVal).trim();
-            suppTypePill.style.display = 'inline-flex';
-        } else {
-            suppTypePill.style.display = 'none';
-        }
-    }
-
-    const techVisitPill = document.getElementById('sd-tech-visit-pill');
-    if (techVisitPill) {
-        const hasVisit = (ticket.technician_visits && ticket.technician_visits.length > 0) || (ticket.custom_support_type || ticket.support_type) === 'Physical Support';
-        if (hasVisit) {
-            techVisitPill.style.display = 'inline-flex';
-            techVisitPill.textContent = 'Technician Visit: Scheduled';
-        } else {
-            techVisitPill.style.display = 'none';
-        }
-    }
-
-    // Header Meta Line
-    setText('sd-created', formatDate(ticket.creation));
-    setText('sd-customer', ticket.customer || ticket.customer_name || '-');
-    const locWrap = document.getElementById('sd-location-wrap');
-    if (ticket.location) {
-        setText('sd-location', ticket.location);
-        if (locWrap) locWrap.style.display = 'inline';
-    } else if (locWrap) {
-        locWrap.style.display = 'none';
-    }
-
+    renderTicketSLA(ticket);
     setRichTextOrCleanHtml('sd-description', ticket.description, 'No description text provided for this ticket.');
+    renderTicketAttachments(ticket.attachments || []);
+    renderTicketFilesGrid(ticket.attachments || []);
+    renderTicketActivity(ticket.activity || []);
+    renderTicketEmailLogs(ticket.emails || []);
+    renderTicketConversation(ticket.comments || ticket.conversation || ticket.communications || [], ticket);
 
-    // Resolution Details
-    const resSec = document.getElementById('sd-resolution-section');
-    const resDetails = ticket.resolution_details || ticket.resolution || '';
-    if (resDetails && resDetails.trim() && resDetails !== '-') {
-        if (resSec) resSec.style.display = '';
-        setRichTextOrCleanHtml('sd-resolution-text', resDetails, 'Resolution details available.');
-        setText('sd-resolution-date', formatDate(ticket.resolution_by || ticket.modified));
-    } else if (ticket.status === 'Resolved' || ticket.status === 'Closed') {
-        if (resSec) resSec.style.display = '';
-        setRichTextOrCleanHtml('sd-resolution-text', 'Ticket status marked as ' + ticket.status + '.', '');
-        setText('sd-resolution-date', formatDate(ticket.modified));
-    } else {
-        if (resSec) resSec.style.display = 'none';
+    if (typeof renderTicketAssignments === 'function') {
+        renderTicketAssignments(ticket.assignees_details || ticket.assignees || []);
+    }
+    if (typeof renderTicketScopeOfWork === 'function') {
+        renderTicketScopeOfWork(ticket.scope_of_work || ticket.custom_scope_of_work || '');
+    }
+    if (typeof renderTicketChecklist === 'function') {
+        renderTicketChecklist(ticket.checklist_items || [], ticket.checklist_state || ticket.custom_checklist_state || '');
+    }
+    if (typeof renderTicketContacts === 'function') {
+        renderTicketContacts(ticket.customer_contacts || ticket.issue_contact_list || [], ticket);
+    }
+    if (typeof renderTicketRenewals === 'function') {
+        renderTicketRenewals(ticket.active_renewals || []);
     }
 
-    // Attachments, Renewals, Activity & Checklist rendering
-    renderTicketAttachments(ticket.attachments || []);
-    renderTicketActivity(ticket.activity || []);
-    renderTicketRenewals(ticket.active_renewals || []);
-    renderTicketScopeOfWork(ticket.scope_of_work || '');
-    renderTicketChecklist(ticket.checklist_items || [], ticket.checklist_state || ticket.custom_checklist_state || '');
-    renderSlaTiers(ticket);
-    renderStakeholderCards(ticket);
-    renderTicketAssignments(ticket.assignees_details || ticket.assignees || []);
-    renderContactDetails(ticket.customer_contacts || [], ticket.person_name, ticket.contact_email);
+    // Sidebar Info Card
+    setText('sd-info-support-type', ticket.custom_support_type || ticket.support_type || '-');
+    setText('sd-info-query-type', ticket.custom_query_type || ticket.category || ticket.issue_type || '-');
+    setText('sd-info-contact-name', ticket.person_name || ticket.raised_by_details?.full_name || portalData?.customer_info?.customer_name || '-');
+    setText('sd-info-contact-email', ticket.contact_email || portalData?.customer_info?.email || '-');
+    setText('sd-info-assigned-team', ticket.assigned_team || ticket.working_agent_name || ticket.support_team || '-');
 
-    pfGo('support-detail', null, true);
+    // Resolution Card
+    const resCard = document.getElementById('sd-resolution-card');
+    const resBadge = document.getElementById('sd-res-status-badge');
+    const resDesc = document.getElementById('sd-res-desc-text');
+    const resDetails = ticket.resolution_details || ticket.resolution || '';
+
+    if ((resDetails && resDetails.trim() && resDetails !== '-') || ticket.status === 'Resolved' || ticket.status === 'Closed') {
+        if (resCard) resCard.style.display = 'block';
+        if (resBadge) {
+            resBadge.textContent = ticket.status === 'Closed' ? 'Closed' : 'Resolved';
+        }
+        if (resDesc) {
+            resDesc.textContent = resDetails || `Ticket marked as ${ticket.status}.`;
+        }
+    } else {
+        if (resCard) resCard.style.display = 'none';
+    }
+
+    go('ticket-detail', null, true);
     if (!skipHash && ticket && ticket.name) {
-        updateUrlPath('support/' + encodeURIComponent(ticket.name));
+        updateUrlPath('tickets/' + encodeURIComponent(ticket.name));
     }
 
     // Fetch live ticket details from server
-    if (ticket && ticket.name) {
+    if (ticket && ticket.name && window.frappe && window.frappe.call) {
         frappe.call({
             method: 'customer_portal.api.get_ticket_details',
             args: { ticket_name: ticket.name },
             callback: function (r) {
-                if (r && r.message && !r.message.error) {
-                    const d = r.message;
+                if (r && r.message) {
+                    const d = r.message.issue || r.message;
+                    currentTicket = d;
 
-                    if (d.priority && priorityPill) {
-                        priorityPill.textContent = d.priority;
-                        priorityPill.style.display = 'inline-flex';
+                    updateStatusPillsAndBadges(d);
+
+                    setText('sd-ticket-id', d.name || '');
+                    setText('sd-subject', d.subject || '');
+                    setText('sd-created', formatDate(d.creation));
+                    setText('sd-updated', formatDate(d.modified || d.creation));
+                    setText('sd-salesperson', d.sales_person || d.sales_person_details?.full_name);
+                    setText('sd-workingagent', d.working_agent_name || d.working_agent);
+
+                    if (priorityPill) {
+                        priorityPill.textContent = `${d.priority || 'Medium'}`;
                     }
-                    if (categoryPill) {
-                        const catVal = d.custom_query_type || d.category || d.issue_type;
-                        if (catVal && String(catVal).trim()) {
-                            categoryPill.textContent = String(catVal).trim();
-                            categoryPill.style.display = 'inline-flex';
-                        } else {
-                            categoryPill.style.display = 'none';
+
+                    setRichTextOrCleanHtml('sd-description', d.description, 'No description text provided for this ticket.');
+
+                    renderTicketSLA(d);
+                    renderTicketContacts(r.message.customer_contacts || d.customer_contacts || d.issue_contact_list || [], d);
+                    renderTicketRenewals(r.message.active_renewals || d.active_renewals || []);
+                    renderTicketAttachments(r.message.attachments || d.attachments || []);
+                    renderTicketFilesGrid(r.message.attachments || d.attachments || []);
+                    renderTicketActivity(r.message.activity || []);
+                    renderTicketEmailLogs(r.message.emails || []);
+                    renderTicketConversation(r.message.comments || r.message.communications || d.comments || d.conversation || [], d);
+
+                    if (typeof renderTicketAssignments === 'function') {
+                        renderTicketAssignments(r.message.assignees_details || d.assignees_details || d.assignees || []);
+                    }
+                    if (typeof renderTicketScopeOfWork === 'function') {
+                        renderTicketScopeOfWork(d.scope_of_work || d.custom_scope_of_work || '');
+                    }
+                    if (typeof renderTicketChecklist === 'function') {
+                        renderTicketChecklist(r.message.checklist_items || d.checklist_items || [], d.checklist_state || d.custom_checklist_state || '');
+                    }
+
+                    setText('sd-info-support-type', d.custom_support_type || d.support_type || '-');
+                    setText('sd-info-query-type', d.custom_query_type || d.category || d.issue_type || '-');
+                    setText('sd-info-contact-name', d.person_name || d.raised_by_details?.full_name || portalData?.customer_info?.customer_name || '-');
+                    setText('sd-info-contact-email', d.contact_email || portalData?.customer_info?.email || '-');
+                    setText('sd-info-assigned-team', d.assigned_team || d.working_agent_name || d.support_team || '-');
+
+                    const dResDetails = d.resolution_details || d.resolution || '';
+                    if ((dResDetails && dResDetails.trim() && dResDetails !== '-') || d.status === 'Resolved' || d.status === 'Closed') {
+                        if (resCard) resCard.style.display = 'block';
+                        if (resBadge) {
+                            resBadge.textContent = d.status === 'Closed' ? 'Closed' : 'Resolved';
                         }
-                    }
-                    if (suppTypePill) {
-                        const suppVal = d.custom_support_type || d.support_type;
-                        if (suppVal && String(suppVal).trim()) {
-                            suppTypePill.textContent = String(suppVal).trim();
-                            suppTypePill.style.display = 'inline-flex';
-                        } else {
-                            suppTypePill.style.display = 'none';
+                        if (resDesc) {
+                            resDesc.textContent = dResDetails || `Ticket marked as ${d.status}.`;
                         }
+                    } else {
+                        if (resCard) resCard.style.display = 'none';
                     }
-
-                    if (d.customer) setText('sd-customer', d.customer);
-                    if (d.location && locWrap) {
-                        setText('sd-location', d.location);
-                        locWrap.style.display = 'inline';
-                    }
-
-                    if (d.resolution_details && d.resolution_details.trim()) {
-                        if (resSec) resSec.style.display = '';
-                        setRichTextOrCleanHtml('sd-resolution-text', d.resolution_details, '');
-                        setText('sd-resolution-date', formatDate(d.resolution_by || d.modified));
-                    }
-
-                    renderTicketAttachments(d.attachments || []);
-                    renderTicketActivity(d.activity || []);
-                    renderTicketRenewals(d.active_renewals || []);
-                    renderTicketScopeOfWork(d.scope_of_work || '');
-                    renderTicketChecklist(d.checklist_items || [], d.checklist_state || d.custom_checklist_state || '');
-                    renderSlaTiers(d);
-                    renderStakeholderCards(d);
-                    renderTicketAssignments(d.assignees_details || d.assignees || []);
-                    renderContactDetails(d.customer_contacts || [], d.person_name, d.contact_email);
                 }
             }
         });
     }
+}
+
+function setRichTextOrCleanHtml(elOrId, htmlContent, fallbackText = 'No description provided.') {
+    const el = typeof elOrId === 'string' ? document.getElementById(elOrId) : elOrId;
+    if (!el) return;
+
+    if (!htmlContent || typeof htmlContent !== 'string' || !htmlContent.trim()) {
+        el.textContent = fallbackText;
+        return;
+    }
+
+    let raw = htmlContent.trim();
+    if (!/<[a-z][\s\S]*>/i.test(raw)) {
+        el.textContent = raw;
+    } else {
+        try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(raw, 'text/html');
+            doc.querySelectorAll('script, style, iframe, object, embed').forEach(s => s.remove());
+            el.replaceChildren();
+            Array.from(doc.body.childNodes).forEach(node => {
+                el.appendChild(node.cloneNode(true));
+            });
+        } catch (e) {
+            el.textContent = raw;
+        }
+    }
+}
+
+function getInitials(name) {
+    if (!name) return 'U';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return parts[0].substring(0, 2).toUpperCase();
 }
 
 function renderSlaTiers(ticket) {
@@ -1369,7 +2299,6 @@ function renderSlaTiers(ticket) {
     const agent = ticket.working_agent_name || ticket.working_agent;
     if (l1Status) {
         l1Status.textContent = agent ? `Assigned (${agent})` : 'Claimed';
-        l1Status.className = 'pf-sla-t-status claimed';
     }
     if (l1Meta) {
         const target = ticket.sla_t1 || ticket.response_by || ticket.sla_resolution_by;
@@ -1382,174 +2311,33 @@ function renderSlaTiers(ticket) {
     if (l3Status) l3Status.textContent = 'Unassigned';
     if (l3Meta) l3Meta.textContent = 'Deadline: ' + (ticket.sla_t3 ? formatDate(ticket.sla_t3) : 'N/A (Stopped)');
 
-    // 1. Resolution SLA
-    const resSlaDateEl = document.getElementById('sd-resolution-sla-date');
-    const resSlaStatusEl = document.getElementById('sd-resolution-sla-status');
-    const resSlaBarWrap = document.getElementById('sd-resolution-sla-bar-wrap');
-    const resSlaBar = document.getElementById('sd-resolution-sla-bar');
-
-    const slaResolutionBy = ticket.sla_resolution_by || ticket.resolution_by;
-    const isResolvedOrClosed = ticket.status === 'Resolved' || ticket.status === 'Closed';
-
-    if (resSlaDateEl) {
-        if (slaResolutionBy) {
-            resSlaDateEl.textContent = formatDate(slaResolutionBy);
-
-            const sla = calculatePortalSla(slaResolutionBy, ticket.creation, isResolvedOrClosed, ticket.agreement_status);
-            if (sla && resSlaStatusEl) {
-                resSlaStatusEl.textContent = sla.timeText;
-                resSlaStatusEl.style.color = sla.textColor;
-                resSlaStatusEl.style.background = sla.bgColor;
-
-                if (resSlaBarWrap && resSlaBar) {
-                    resSlaBarWrap.style.display = 'block';
-                    resSlaBar.style.width = `${sla.percentElapsed}%`;
-                    resSlaBar.style.background = sla.barColor;
-                }
-            } else if (resSlaStatusEl) {
-                resSlaStatusEl.textContent = isResolvedOrClosed ? 'Fulfilled' : 'Active';
-                resSlaStatusEl.style.color = 'var(--ink-soft)';
-                resSlaStatusEl.style.background = 'rgba(0,0,0,0.05)';
-                if (resSlaBarWrap) resSlaBarWrap.style.display = 'none';
-            }
-        } else {
-            resSlaDateEl.textContent = 'No SLA';
-            if (resSlaStatusEl) {
-                resSlaStatusEl.textContent = 'Not Set';
-                resSlaStatusEl.style.color = 'var(--ink-soft)';
-                resSlaStatusEl.style.background = 'rgba(0,0,0,0.05)';
-            }
-            if (resSlaBarWrap) resSlaBarWrap.style.display = 'none';
-        }
-    }
-
-    // 2. Created On & Last Update On
     const createdEl = document.getElementById('sd-sla-created-on');
     const updatedEl = document.getElementById('sd-sla-updated-on');
-
-    if (createdEl) {
-        createdEl.textContent = ticket.creation ? formatDate(ticket.creation) : '-';
-    }
-    if (updatedEl) {
-        updatedEl.textContent = ticket.modified ? formatDate(ticket.modified) : '-';
-    }
-}
-
-/**
- * Calculates resolution SLA progress percentage, remaining time or breach status for Customer Portal.
- */
-function calculatePortalSla(slaResolutionBy, creationDateStr, isResolvedOrClosed, agreementStatus) {
-    if (!slaResolutionBy) return null;
-    const slaDate = new Date(slaResolutionBy);
-    const creationDate = creationDateStr ? new Date(creationDateStr) : new Date();
-    if (isNaN(slaDate.getTime())) return null;
-    const now = new Date();
-
-    let timeDiffMs = slaDate - now;
-    let totalMs = slaDate - creationDate;
-    if (totalMs <= 0) totalMs = 1;
-
-    let percentElapsed = ((now - creationDate) / totalMs) * 100;
-    if (percentElapsed < 0) percentElapsed = 0;
-    if (percentElapsed > 100) percentElapsed = 100;
-
-    let timeText = "";
-    let barColor = "#10b981"; // green
-    let textColor = "#059669";
-    let bgColor = "rgba(16, 185, 129, 0.1)";
-
-    if (isResolvedOrClosed) {
-        percentElapsed = 100;
-        if (agreementStatus === "Failed") {
-            timeText = "Fulfilled (Late)";
-            barColor = "#ef4444";
-            textColor = "#dc2626";
-            bgColor = "rgba(239, 68, 68, 0.1)";
-        } else {
-            timeText = "Fulfilled (On Time)";
-            barColor = "#10b981";
-            textColor = "#059669";
-            bgColor = "rgba(16, 185, 129, 0.1)";
-        }
-    } else if (agreementStatus === "Failed" || timeDiffMs < 0) {
-        const overrunMs = Math.abs(timeDiffMs);
-        const hoursOverrun = overrunMs / (1000 * 60 * 60);
-        let overrunText = "";
-        if (hoursOverrun > 24) {
-            overrunText = `-${Math.round(hoursOverrun / 24)}d`;
-        } else if (hoursOverrun > 1) {
-            overrunText = `-${Math.round(hoursOverrun)}h`;
-        } else {
-            const minsOverrun = Math.round(overrunMs / (1000 * 60));
-            overrunText = `-${minsOverrun}m`;
-        }
-        timeText = `Breached (${overrunText})`;
-        barColor = "#ef4444";
-        textColor = "#dc2626";
-        bgColor = "rgba(239, 68, 68, 0.1)";
-    } else {
-        const hoursLeft = timeDiffMs / (1000 * 60 * 60);
-        if (hoursLeft > 24) {
-            timeText = `~${Math.round(hoursLeft / 24)}d left`;
-        } else if (hoursLeft > 1) {
-            timeText = `~${Math.round(hoursLeft)}h left`;
-        } else {
-            const minsLeft = Math.round(timeDiffMs / (1000 * 60));
-            timeText = `${minsLeft}m left`;
-        }
-
-        if (hoursLeft < 2) {
-            barColor = "#ef4444";
-            textColor = "#dc2626";
-            bgColor = "rgba(239, 68, 68, 0.1)";
-        } else if (hoursLeft < 6) {
-            barColor = "#f59e0b";
-            textColor = "#d97706";
-            bgColor = "rgba(245, 158, 11, 0.1)";
-        }
-    }
-
-    return { percentElapsed, timeText, barColor, textColor, bgColor };
+    if (createdEl) createdEl.textContent = ticket.creation ? formatDate(ticket.creation) : '-';
+    if (updatedEl) updatedEl.textContent = ticket.modified ? formatDate(ticket.modified) : '-';
 }
 
 function renderStakeholderCards(ticket) {
-    // 1. Assigned To (Working Agent)
     const assignedCard = document.getElementById('sd-assignedto-card');
     const agentMeta = ticket.working_agent_details || {};
     const agentName = agentMeta.full_name || ticket.working_agent;
-    const agentRole = agentMeta.designation || agentMeta.role_profile || 'Support Technician';
 
     if (agentName && assignedCard) {
         assignedCard.style.display = '';
+        const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || '-'; };
         setText('sd-assignedto-av', getInitials(agentName));
         setText('sd-assignedto-name', agentName);
-        setText('sd-assignedto-role', agentRole);
+        setText('sd-assignedto-role', agentMeta.designation || 'Support Technician');
     } else if (assignedCard) {
         assignedCard.style.display = 'none';
     }
 
-    // 2. Raised By
     const raisedName = ticket.person_name || (ticket.raised_by_details && ticket.raised_by_details.full_name) || ticket.raised_by || 'Customer';
     const raisedRole = (ticket.raised_by_details && ticket.raised_by_details.designation) || ticket.contact_email || 'Customer User';
-    const initials = getInitials(raisedName);
-
-    setText('sd-raised-by-av', initials);
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || '-'; };
+    setText('sd-raised-by-av', getInitials(raisedName));
     setText('sd-raised-by-name', raisedName);
     setText('sd-raised-by-role', raisedRole);
-
-    // 3. Sales Person
-    const salesCard = document.getElementById('sd-salesperson-card');
-    const salesMeta = ticket.sales_person_details || {};
-    const salesName = salesMeta.full_name || ticket.sales_person;
-
-    if (salesName && salesCard) {
-        salesCard.style.display = '';
-        setText('sd-salesperson-av', getInitials(salesName));
-        setText('sd-salesperson-name', salesName);
-        setText('sd-salesperson-role', salesMeta.designation || 'Sales Manager');
-    } else if (salesCard) {
-        salesCard.style.display = 'none';
-    }
 }
 
 function renderTicketAssignments(assignees) {
@@ -1558,9 +2346,7 @@ function renderTicketAssignments(assignees) {
     if (!container) return;
 
     container.innerHTML = '';
-
     const list = Array.isArray(assignees) ? assignees : [];
-
     if (list.length === 0) {
         container.innerHTML = '<span style="font-size:12.5px;color:var(--ink-soft);">No assignments</span>';
         if (secEl) secEl.style.display = '';
@@ -1568,213 +2354,51 @@ function renderTicketAssignments(assignees) {
     }
 
     if (secEl) secEl.style.display = '';
-
-    function safeEscape(str) {
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
-
-    const userDocs = list.map(u => {
+    list.forEach(u => {
         const name = typeof u === 'string' ? u : (u.full_name || u.name || u.email || 'User');
-        const email = typeof u === 'object' ? (u.email || u.name || '') : '';
-        const userImg = typeof u === 'object' ? (u.user_image || '') : '';
-        const initials = getInitials(name);
-        return { name, email, userImg, initials };
-    });
-
-    const maxVisible = 4;
-    const visibleUsers = userDocs.slice(0, maxVisible);
-    const extraCount = userDocs.length - visibleUsers.length;
-
-    const avatarsRow = cel('div', {
-        style: 'display: inline-flex; align-items: center; padding: 4px 2px;'
-    });
-
-    visibleUsers.forEach((u, idx) => {
-        const tooltipTitle = u.email ? `${u.name} (${u.email})` : u.name;
-
-        const avDiv = cel('div', {
-            style: `width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #6366f1); color: #ffffff; font-size: 11px; font-weight: 700; display: grid; place-items: center; overflow: hidden; flex-shrink: 0; border: 2px solid #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.12); cursor: pointer; position: relative; transition: all 0.2s ease; ${idx > 0 ? 'margin-left: -10px;' : ''}`,
-            title: safeEscape(tooltipTitle)
+        const badge = cel('span', {
+            style: 'display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:var(--indigo-wash,#f5f3ff);color:var(--indigo,#4f46e5);border-radius:12px;font-size:12px;font-weight:600;',
+            textContent: name
         });
-
-        avDiv.addEventListener('mouseenter', () => {
-            avDiv.style.transform = 'scale(1.2) translateY(-2px)';
-            avDiv.style.zIndex = '10';
-            avDiv.style.boxShadow = '0 4px 12px rgba(79, 70, 229, 0.35)';
-        });
-        avDiv.addEventListener('mouseleave', () => {
-            avDiv.style.transform = 'none';
-            avDiv.style.zIndex = '1';
-            avDiv.style.boxShadow = '0 1px 3px rgba(0,0,0,0.12)';
-        });
-
-        if (u.userImg) {
-            avDiv.innerHTML = `<img src="${safeEscape(u.userImg)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.onerror=null;this.parentElement.textContent='${safeEscape(u.initials)}';">`;
-        } else {
-            avDiv.textContent = u.initials;
-        }
-
-        avatarsRow.appendChild(avDiv);
-    });
-
-    if (extraCount > 0) {
-        const extraNames = userDocs.slice(maxVisible).map(u => u.name).join(', ');
-        const extraDiv = cel('div', {
-            style: 'width: 32px; height: 32px; border-radius: 50%; background: #64748b; color: #ffffff; font-size: 11px; font-weight: 700; display: grid; place-items: center; overflow: hidden; flex-shrink: 0; border: 2px solid #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.12); cursor: pointer; position: relative; margin-left: -10px; transition: all 0.2s ease;',
-            title: safeEscape(extraNames),
-            textContent: `+${extraCount}`
-        });
-
-        extraDiv.addEventListener('mouseenter', () => {
-            extraDiv.style.transform = 'scale(1.2) translateY(-2px)';
-            extraDiv.style.zIndex = '10';
-            extraDiv.style.boxShadow = '0 4px 12px rgba(100, 116, 139, 0.35)';
-        });
-        extraDiv.addEventListener('mouseleave', () => {
-            extraDiv.style.transform = 'none';
-            extraDiv.style.zIndex = '1';
-            extraDiv.style.boxShadow = '0 1px 3px rgba(0,0,0,0.12)';
-        });
-
-        avatarsRow.appendChild(extraDiv);
-    }
-
-    container.appendChild(avatarsRow);
-}
-
-function renderContactDetails(contacts, fallbackName, fallbackEmail) {
-    const listEl = document.getElementById('sd-contacts-list');
-    if (!listEl) return;
-
-    listEl.innerHTML = '';
-    let items = Array.isArray(contacts) ? [...contacts] : [];
-    window.currentTicketContacts = items;
-
-    if (!items.length && (fallbackName || fallbackEmail)) {
-        items.push({
-            person_name: fallbackName || fallbackEmail,
-            designation: 'Primary Contact',
-            email_id: fallbackEmail || '',
-            mobile_no: '',
-            is_primary: 1
-        });
-    }
-
-    if (!items.length) {
-        listEl.innerHTML = '<div style="color:var(--ink-soft);font-size:13px;text-align:center;padding:12px;">No contact persons linked.</div>';
-        return;
-    }
-
-    items.forEach(c => {
-        const cName = c.person_name || c.name || 'Contact';
-        const displayName = (c.user_name || "").split("-")[0].trim() || c.user_name || "Unnamed Contact";
-        const initials = getInitials(cName);
-
-        const card = cel('div', { class: 'pf-contact-card' }, [
-            cel('div', { class: 'pf-contact-av' }, [initials]),
-            cel('div', { class: 'pf-contact-body' }, [
-                cel('div', { class: 'pf-contact-name', textContent: displayName }),
-                c.designation ? cel('div', { class: 'pf-contact-desig', textContent: c.designation }) : null,
-                c.email_id ? cel('div', { class: 'pf-contact-meta' }, [
-                    cel('i', { class: 'ti ti-mail' }),
-                    cel('span', { textContent: c.email_id })
-                ]) : null,
-                c.mobile_no ? cel('div', { class: 'pf-contact-meta' }, [
-                    cel('i', { class: 'ti ti-phone' }),
-                    cel('span', { textContent: c.mobile_no })
-                ]) : null,
-                c.is_primary ? cel('div', { style: 'margin-top:4px;' }, [
-                    cel('span', { class: 'tpoc-badge', textContent: 'TPOC' })
-                ]) : null
-            ])
-        ]);
-        listEl.appendChild(card);
+        container.appendChild(badge);
     });
 }
-
-function getInitials(name) {
-    if (!name) return 'U';
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-    return parts[0].substring(0, 2).toUpperCase();
-}
-
-// Holds the current ticket's raw scope_of_work HTML for the view modal
-let _portalCurrentScopeHtml = '';
 
 function renderTicketScopeOfWork(scopeText) {
     const secEl = document.getElementById('sd-scope-section');
     const previewEl = document.getElementById('sd-scope-preview');
-    const emptyEl = document.getElementById('sd-scope-empty');
-    const viewBtn = document.getElementById('sd-scope-view-btn');
-    const viewTextEl = document.getElementById('sd-scope-view-text');
-    const viewIconEl = document.getElementById('sd-scope-view-icon');
     if (!secEl) return;
 
-    // Reset expanded state on load
-    if (previewEl) previewEl.classList.remove('expanded');
-    if (viewTextEl) viewTextEl.textContent = 'View More';
-    if (viewIconEl) viewIconEl.className = 'ti ti-chevron-down';
-
-    // Normalize to detect real content (strip empty HTML tags)
-    const cleanText = (scopeText || '')
-        .replace(/<p><\/p>/gi, '')
-        .replace(/<p><br\s*\/?><\/p>/gi, '')
-        .replace(/<br\s*\/?>/gi, '')
-        .replace(/<[^>]*>/g, '')
-        .trim();
-
-    const hasContent = !!(scopeText && scopeText.trim() && scopeText.trim() !== '-' && cleanText);
-
-    // Store globally
-    _portalCurrentScopeHtml = hasContent ? scopeText : '';
-
+    const hasContent = !!(scopeText && scopeText.trim() && scopeText.trim() !== '-');
     if (hasContent) {
-        // Show section with content
         secEl.style.display = '';
         if (previewEl) {
             setRichTextOrCleanHtml(previewEl, scopeText, '');
             previewEl.style.display = 'block';
         }
-        if (emptyEl) emptyEl.style.display = 'none';
-
-        // Check if content length warrants a View More button (or show by default if has HTML/multiple lines)
-        if (viewBtn) {
-            const isLongContent = cleanText.length > 100 || (scopeText.includes('<p>') && scopeText.split('</p>').length > 2);
-            viewBtn.style.display = isLongContent ? 'inline-flex' : 'none';
-        }
     } else {
-        // Hide the entire section when no scope of work data
         secEl.style.display = 'none';
-        _portalCurrentScopeHtml = '';
     }
 }
 
-/**
- * Toggles inline expansion of the Scope of Work section (View More <-> Show Less).
- */
 function togglePortalScopeExpand() {
     const previewEl = document.getElementById('sd-scope-preview');
-    const viewTextEl = document.getElementById('sd-scope-view-text');
-    const viewIconEl = document.getElementById('sd-scope-view-icon');
-    if (!previewEl) return;
+    if (previewEl) previewEl.style.display = previewEl.style.display === 'none' ? 'block' : 'none';
+}
 
-    const isExpanded = previewEl.classList.contains('expanded');
-
-    if (isExpanded) {
-        previewEl.classList.remove('expanded');
-        if (viewTextEl) viewTextEl.textContent = 'View More';
-        if (viewIconEl) viewIconEl.className = 'ti ti-chevron-down';
-    } else {
-        previewEl.classList.add('expanded');
-        if (viewTextEl) viewTextEl.textContent = 'Show Less';
-        if (viewIconEl) viewIconEl.className = 'ti ti-chevron-up';
+function formatShortTimestamp(tsStr) {
+    if (!tsStr) return '';
+    try {
+        const d = new Date(tsStr);
+        if (isNaN(d.getTime())) return tsStr;
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = String(d.getFullYear()).slice(-2);
+        const hours = String(d.getHours()).padStart(2, '0');
+        const mins = String(d.getMinutes()).padStart(2, '0');
+        return `${day}-${month}-${year} ${hours}:${mins}`;
+    } catch (e) {
+        return tsStr;
     }
 }
 
@@ -1787,7 +2411,6 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
     let itemsMap = {};
     let checkedStates = {};
 
-    // 1. Safely parse checklistStateStr (String or Object)
     if (checklistStateStr) {
         if (typeof checklistStateStr === 'object' && checklistStateStr !== null) {
             checkedStates = checklistStateStr;
@@ -1798,7 +2421,6 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         }
     }
 
-    // 2. Load base items from checklistItems array
     if (Array.isArray(checklistItems)) {
         checklistItems.forEach(chk => {
             const rawTitle = typeof chk === 'string' ? chk : (chk.item || chk.activity || chk.title || chk.task_description || '');
@@ -1817,7 +2439,6 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         });
     }
 
-    // 3. Extract items from _selected_items in checkedStates
     if (checkedStates && Array.isArray(checkedStates._selected_items)) {
         checkedStates._selected_items.forEach(stItem => {
             const rawTitle = typeof stItem === 'string' ? stItem : (stItem.item || stItem.activity || stItem.title || stItem.label || '');
@@ -1837,7 +2458,6 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         });
     }
 
-    // 4. Update or add items from checkedStates keys
     if (checkedStates && typeof checkedStates === 'object' && !Array.isArray(checkedStates)) {
         Object.keys(checkedStates).forEach(key => {
             if (key.startsWith('_')) return;
@@ -1891,16 +2511,12 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         return;
     }
 
-    // 5. Filter by _selected_items if available in checkedStates
     let items = allItems;
     if (checkedStates && Array.isArray(checkedStates._selected_items) && checkedStates._selected_items.length > 0) {
         const selectedList = checkedStates._selected_items;
 
         const filtered = allItems.filter(itemObj => {
             const cleanTitle = itemObj.item.trim();
-            if (itemObj.status === 'completed' || itemObj.status === 'not_required' || itemObj.status === 'transferred') {
-                return true;
-            }
             return selectedList.some(st => {
                 if (typeof st === 'string') {
                     const stClean = st.includes('::') ? st.split('::').pop().trim() : st.trim();
@@ -1918,15 +2534,20 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         }
     }
 
+    if (!items || items.length === 0) {
+        secEl.style.display = 'none';
+        return;
+    }
+
     secEl.style.display = '';
 
-    // Calculate progress statistics
     const doneCount = items.filter(i => i.status === 'completed' || i.status === 1).length;
     const escCount = items.filter(i => i.status === 'transferred' || i.status === 'escalated').length;
     const naCount = items.filter(i => i.status === 'not_required').length;
     const pendingCount = Math.max(0, items.length - (doneCount + escCount + naCount));
     const pct = items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0;
 
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     setText('sd-chk-pct', pct + '%');
     const barEl = document.getElementById('sd-chk-bar');
     if (barEl) barEl.style.width = pct + '%';
@@ -1952,21 +2573,17 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         const isNA = chk.status === 'not_required';
         const isEscalated = chk.status === 'transferred' || chk.status === 'escalated';
 
-        // 1. Left Check Circle (Image 2: Solid Green Circle with Checkmark for completed, empty for pending/NA)
         const circleDiv = cel('div', {
             style: `width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; margin-top: 2px; ${isDone
-                    ? 'background: #16a34a; border: none; color: #ffffff;'
-                    : 'background: #ffffff; border: 2px solid #cbd5e1; color: transparent;'
+                ? 'background: #16a34a; border: none; color: #ffffff;'
+                : 'background: #ffffff; border: 2px solid #cbd5e1; color: transparent;'
                 }`
         });
         circleDiv.innerHTML = isDone
             ? '<i class="ti ti-check" style="font-size: 14px; font-weight: 800;"></i>'
             : '';
 
-        // 2. Middle Content Column
         const mainDiv = cel('div', { style: 'flex: 1; display: flex; flex-direction: column; gap: 4px;' });
-
-        // Title + Pill Row
         const titleRow = cel('div', { style: 'display: flex; align-items: center; gap: 8px; flex-wrap: wrap;' });
 
         const titleSpan = cel('span', {
@@ -2000,12 +2617,10 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         titleRow.appendChild(pillSpan);
         mainDiv.appendChild(titleRow);
 
-        // Note Line (e.g. "☑ completed issues" or "✕ Already completed externally")
         const noteText = chk.note || (isDone ? 'completed issues' : isNA ? 'Already completed externally' : '');
         if (noteText) {
             const noteDiv = cel('div', {
-                style: `font-size: 12.5px; margin-top: 1px; display: flex; align-items: center; gap: 4px; ${isDone ? 'color: #16a34a; font-weight: 500;' : isNA ? 'color: #94a3b8; font-style: italic;' : 'color: #64748b;'
-                    }`
+                style: `font-size: 12.5px; margin-top: 1px; display: flex; align-items: center; gap: 4px; ${isDone ? 'color: #16a34a; font-weight: 500;' : isNA ? 'color: #94a3b8; font-style: italic;' : 'color: #64748b;'}`
             });
             const noteIcon = cel('i', {
                 class: isDone ? 'ti ti-checkbox' : isNA ? 'ti ti-x' : 'ti ti-notes',
@@ -2017,27 +2632,22 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
             mainDiv.appendChild(noteDiv);
         }
 
-        // Meta Line: User & Clock Timestamp (Formatted like 12-08-26 12:01)
         if (chk.user || chk.timestamp) {
             const metaDiv = cel('div', { style: 'display: flex; align-items: center; gap: 14px; margin-top: 3px; font-size: 11.5px; color: #64748b;' });
-
             if (chk.user) {
                 const userSpan = cel('span', { style: 'display: flex; align-items: center; gap: 4px;' });
                 userSpan.innerHTML = `<i class="ti ti-user" style="font-size: 12px;"></i> ${safeEscape(chk.user)}`;
                 metaDiv.appendChild(userSpan);
             }
-
             if (chk.timestamp) {
                 const formattedTime = formatShortTimestamp(chk.timestamp);
                 const timeSpan = cel('span', { style: 'display: flex; align-items: center; gap: 4px;' });
                 timeSpan.innerHTML = `<i class="ti ti-clock" style="font-size: 12px;"></i> ${safeEscape(formattedTime)}`;
                 metaDiv.appendChild(timeSpan);
             }
-
             mainDiv.appendChild(metaDiv);
         }
 
-        // 3. Right Status Button Column (Image 2 Right Badges)
         let btnBg = '#fef9c3';
         let btnColor = '#854d0e';
         let btnBorder = '#fef08a';
@@ -2071,918 +2681,828 @@ function renderTicketChecklist(checklistItems, checklistStateStr) {
         });
         rightDiv.appendChild(badgeBtn);
 
-        // Row container
         const itemRow = cel('div', {
-            style: `display: flex; align-items: flex-start; gap: 14px; padding: 16px 20px; border-bottom: 1px solid #f1f5f9; ${isDone ? 'background: rgba(34, 197, 94, 0.02);' : 'background: #ffffff;'
-                }`
+            style: `display: flex; align-items: flex-start; gap: 14px; padding: 16px 20px; border-bottom: 1px solid #f1f5f9; ${isDone ? 'background: rgba(34, 197, 94, 0.02);' : 'background: #ffffff;'}`
         }, [circleDiv, mainDiv, rightDiv]);
 
         listEl.appendChild(itemRow);
     });
 }
 
-function formatShortTimestamp(tsStr) {
-    if (!tsStr) return '';
-    try {
-        const d = new Date(tsStr);
-        if (isNaN(d.getTime())) return tsStr;
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const year = String(d.getFullYear()).slice(-2);
-        const hours = String(d.getHours()).padStart(2, '0');
-        const mins = String(d.getMinutes()).padStart(2, '0');
-        return `${day}-${month}-${year} ${hours}:${mins}`;
-    } catch (e) {
-        return tsStr;
-    }
-}
-
-function renderTicketRenewals(renewals) {
-    const secEl = document.getElementById('sd-renewals-section');
-    const listEl = document.getElementById('sd-renewals-list');
-    if (!secEl || !listEl) return;
+function renderTicketContacts(contacts, d) {
+    const secEl = document.getElementById('sd-contacts-card');
+    const listEl = document.getElementById('sd-contacts-list');
+    if (!listEl) return;
 
     listEl.innerHTML = '';
-    if (!renewals || !renewals.length) {
-        secEl.style.display = 'none';
+    let list = Array.isArray(contacts) ? contacts : [];
+
+    if (!list.length && d && (d.person_name || d.contact_email)) {
+        list = [{
+            person_name: d.person_name || d.raised_by_details?.full_name || 'Contact Person',
+            email_id: d.contact_email || '',
+            mobile_no: d.contact_number || d.phone || '',
+            designation: 'Contact Person',
+            is_primary: 1
+        }];
+    }
+
+    if (!list.length) {
+        if (secEl) secEl.style.display = 'none';
         return;
     }
 
-    secEl.style.display = '';
-    renewals.forEach(ren => {
-        const title = ren.item || ren.item_name || ren.product_name || ren.renewal_id || 'Renewal Item';
-        const subParts = [];
-        if (ren.renewal_id) subParts.push(ren.renewal_id);
-        if (ren.quantity) subParts.push(`Qty: ${ren.quantity}`);
-        if (ren.end_date) subParts.push(`Ends ${formatDate(ren.end_date)}`);
+    if (secEl) secEl.style.display = 'block';
 
-        const item = cel('div', { class: 'pf-asset-card' }, [
-            cel('div', { class: 'pf-asset-icon' }, [
-                cel('i', { class: 'ti ti-device-desktop' })
+    list.forEach(c => {
+        const rawName = c.person_name || c.user_name || c.name || 'Contact';
+        const displayName = (rawName || '').split('-')[0].trim() || rawName || 'Unnamed Contact';
+        const initial = displayName.charAt(0).toUpperCase();
+        const desig = c.designation || '';
+        const email = c.email_id || '';
+        const mobile = c.mobile_no || c.phone || '';
+        const isTpoc = c.tpoc || c.is_primary || c.custom_tpoc;
+
+        const card = cel('div', {
+            style: 'padding:12px;background:var(--canvas,#f8fafc);border:1px solid var(--line,#e2e8f0);border-radius:10px;margin-bottom:10px;'
+        }, [
+            cel('div', { style: 'display:flex;align-items:center;gap:10px;margin-bottom:6px;' }, [
+                cel('div', { style: 'width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;' }, [
+                    document.createTextNode(initial)
+                ]),
+                cel('div', {}, [
+                    cel('div', { style: 'font-weight:700;font-size:13px;color:var(--ink,#1e293b);', textContent: displayName }),
+                    desig ? cel('div', { style: 'font-size:11px;color:var(--ink-soft,#64748b);', textContent: desig }) : null
+                ].filter(Boolean))
             ]),
-            cel('div', { style: 'flex:1;min-width:0;' }, [
-                cel('div', { class: 'pf-asset-title', textContent: title }),
-                cel('div', { class: 'pf-asset-sub', textContent: subParts.join(' · ') || 'Active Asset' })
-            ])
-        ]);
-        listEl.appendChild(item);
+            email ? cel('div', { style: 'font-size:11.5px;color:var(--blue,#2563eb);word-break:break-all;margin-top:6px;display:flex;align-items:center;gap:6px;' }, [
+                cel('i', { class: 'ti ti-mail', style: 'color:var(--ink-soft);' }),
+                cel('span', { textContent: email })
+            ]) : null,
+            mobile ? cel('div', { style: 'font-size:11.5px;color:var(--ink,#1e293b);margin-top:4px;display:flex;align-items:center;gap:6px;' }, [
+                cel('i', { class: 'ti ti-phone', style: 'color:var(--ink-soft);' }),
+                cel('span', { textContent: mobile })
+            ]) : null,
+            isTpoc ? cel('div', { style: 'margin-top:6px;' }, [
+                cel('span', { class: 'tpoc-badge-green', style: 'font-size:10px;padding:2px 6px;', textContent: '✓ TPOC' })
+            ]) : null
+        ].filter(Boolean));
+
+        listEl.appendChild(card);
     });
 }
+
+function renderTicketRenewals(renewals) {
+    const secEl = document.getElementById('sd-renewals-card') || document.getElementById('sd-renewals-section');
+    const listEl = document.getElementById('sd-renewals-list');
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+    const list = Array.isArray(renewals) ? renewals : [];
+    if (!list.length) {
+        if (secEl) secEl.style.display = 'none';
+        return;
+    }
+
+    if (secEl) secEl.style.display = 'block';
+
+    list.forEach(ren => {
+        const title = ren.item || ren.item_name || ren.product_name || 'Asset Item';
+        const renewalId = ren.renewal_id ? `${ren.renewal_id}` : '';
+        const endDate = ren.end_date ? `-${ren.end_date}` : '';
+        const qty = (ren.quantity || ren.total_quantity) ? `-${ren.quantity || ren.total_quantity}` : '';
+
+        const metaText = [renewalId, qty, endDate].filter(Boolean).join(' ');
+
+        const card = cel('div', {
+            style: 'padding:12px;background:var(--canvas,#f8fafc);border:1px solid var(--line,#e2e8f0);border-radius:10px;margin-bottom:10px;'
+        }, [
+            cel('div', { style: 'display:flex;align-items:center;gap:10px;margin-bottom:4px;' }, [
+                cel('div', { style: 'width:32px;height:32px;border-radius:8px;background:rgba(37,99,235,0.1);color:#2563eb;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px;' }, [
+                    cel('i', { class: 'ti ti-box' })
+                ]),
+                cel('div', { style: 'font-weight:700;font-size:13px;color:var(--ink,#1e293b);', textContent: title })
+            ]),
+            metaText ? cel('div', { style: 'font-size:11.5px;color:var(--ink-soft,#64748b);margin-left:42px;', textContent: metaText }) : null
+        ].filter(Boolean));
+
+        listEl.appendChild(card);
+    });
+}
+
+function renderTicketAttachments(attachments) {
+    const listEl = document.getElementById('sd-attachments-list');
+    const overviewCountEl = document.getElementById('sd-att-count');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+
+    const list = attachments || [];
+    if (overviewCountEl) overviewCountEl.textContent = list.length;
+
+    if (!list.length) {
+        listEl.innerHTML = '<div class="td-empty-msg">No attachments for this ticket.</div>';
+        return;
+    }
+
+    // Render ONLY the latest 5 attachments in Overview tab
+    const overviewList = list.slice(0, 5);
+
+    overviewList.forEach(att => {
+        const ext = (att.file_name || '').split('.').pop().toUpperCase() || 'FILE';
+        const formattedSize = att.file_size ? `${Math.round(att.file_size / 1024)} KB` : 'File';
+        const isImg = ['JPG', 'JPEG', 'PNG', 'GIF', 'WEBP', 'SVG'].includes(ext);
+
+        const item = document.createElement('a');
+        item.className = 'td-attach-row';
+        item.href = att.file_url || '#';
+        item.target = '_blank';
+
+        let badgeHtml = `<span class="ext mono">${safeEscape(ext)}</span>`;
+        if (isImg && att.file_url) {
+            badgeHtml = `<div style="width:28px;height:28px;border-radius:6px;overflow:hidden;background:#f1f5f9;flex-shrink:0;margin-right:8px;border:1px solid #cbd5e1;"><img src="${att.file_url}" alt="Preview" style="width:100%;height:100%;object-fit:cover;"></div>`;
+        }
+
+        item.innerHTML = `
+            ${badgeHtml}
+            <span class="name" title="${safeEscape(att.file_name)}">${safeEscape(att.file_name || 'Attachment')}</span>
+            <span class="sz">${formattedSize}</span>
+            <i class="ti ti-download dl"></i>
+        `;
+        listEl.appendChild(item);
+    });
+
+    // If total attachments > 5, render link to switch to Files tab
+    if (list.length > 5) {
+        const moreLink = document.createElement('div');
+        moreLink.style.cssText = 'padding:10px 0 2px 0;text-align:center;border-top:1px dashed var(--td-line,#e2e6f0);margin-top:6px;';
+        moreLink.innerHTML = `
+            <a href="javascript:void(0)" onclick="const tab = document.querySelector('.td-page-tab[onclick*=\\'tab-files\\']'); if(tab) tdPageTab(tab, 'tab-files');" style="color:var(--td-cyan,#0284c7);font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:5px;text-decoration:none;">
+                View all ${list.length} attachments in Files tab <i class="ti ti-arrow-right"></i>
+            </a>
+        `;
+        listEl.appendChild(moreLink);
+    }
+}
+
+function renderTicketFilesGrid(attachments) {
+    const gridEl = document.getElementById('sd-files-attach-grid');
+    const countEl = document.getElementById('sd-files-grid-count');
+    const tabCountEl = document.getElementById('td-files-count');
+    const overviewCountEl = document.getElementById('sd-att-count');
+    if (!gridEl) return;
+    gridEl.innerHTML = '';
+
+    const list = attachments || [];
+    if (countEl) countEl.textContent = list.length;
+    if (tabCountEl) tabCountEl.textContent = list.length;
+    if (overviewCountEl) overviewCountEl.textContent = list.length;
+
+    if (!list.length) {
+        gridEl.innerHTML = '<div class="td-empty-msg" style="grid-column:1/-1;">No attachments uploaded.</div>';
+        return;
+    }
+
+    list.forEach(att => {
+        const ext = (att.file_name || '').split('.').pop().toUpperCase() || 'FILE';
+        const card = document.createElement('a');
+        card.className = 'td-attach-card';
+        card.href = att.file_url || '#';
+        card.target = '_blank';
+
+        const isImg = ['JPG', 'JPEG', 'PNG', 'GIF', 'WEBP', 'SVG'].includes(ext);
+        const iconClass = isImg ? 'ti ti-photo' : (ext === 'PDF' ? 'ti ti-file-text' : 'ti ti-paperclip');
+        const formattedSize = att.file_size ? `${Math.round(att.file_size / 1024)} KB` : 'File';
+
+        let thumbContent = `<i class="${iconClass}"></i>`;
+        if (isImg && att.file_url) {
+            thumbContent = `<img src="${att.file_url}" alt="Preview" style="width:100%;height:100%;object-fit:cover;border-radius:6px;">`;
+        }
+
+        card.innerHTML = `
+            <div class="td-attach-thumb">${thumbContent}</div>
+            <div class="td-attach-meta">
+                <div class="td-attach-name" title="${safeEscape(att.file_name)}">${safeEscape(att.file_name || 'Attachment')}</div>
+                <div class="td-attach-sub"><span>${formattedSize}</span><i class="ti ti-download"></i></div>
+            </div>
+        `;
+        gridEl.appendChild(card);
+    });
+}
+
+function cleanTextSummary(htmlString) {
+    if (!htmlString) return '';
+    let text = String(htmlString);
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    text = text.replace(/<[^>]*>/g, ' ');
+    text = text.replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'");
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+function toggleEmailTemplate(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const isExpanded = el.classList.contains('expanded');
+    const span = btn.querySelector('span');
+    const icon = btn.querySelector('i');
+
+    if (isExpanded) {
+        el.classList.remove('expanded');
+        if (span) span.textContent = 'Show Email Template';
+        if (icon) icon.className = 'ti ti-mail-opened';
+    } else {
+        el.classList.add('expanded');
+        if (span) span.textContent = 'Hide Email Template';
+        if (icon) icon.className = 'ti ti-mail';
+    }
+}
+window.toggleEmailTemplate = toggleEmailTemplate;
+
+function renderTicketEmailLogs(emails) {
+    const feedEl = document.getElementById('sd-email-log-feed');
+    const countEl = document.getElementById('td-emails-count');
+    const flagEl = document.getElementById('td-emails-flag');
+    if (!feedEl) return;
+    feedEl.innerHTML = '';
+
+    const emailList = emails || [];
+    if (countEl) countEl.textContent = emailList.length;
+
+    let hasFailures = false;
+    if (!emailList.length) {
+        feedEl.innerHTML = '<div class="td-empty-msg">No emails logged for this ticket.</div>';
+        if (flagEl) flagEl.style.display = 'none';
+        return;
+    }
+
+    emailList.forEach((em, idx) => {
+        if (em.status === 'fail') hasFailures = true;
+        const row = document.createElement('div');
+        row.className = 'td-elog-row';
+
+        const descText = em.content || '';
+        const isHtml = typeof descText === 'string' && (descText.includes('<table') || descText.includes('<div') || descText.includes('<html>') || descText.includes('<!DOCTYPE') || descText.includes('<style'));
+
+        const toVal = em.recipients || 'N/A';
+        const ccVal = em.cc || '';
+        const bccVal = em.bcc || '';
+        let rawSubj = em.subject || '';
+        let subjVal = rawSubj ? rawSubj.replace(/Ticket\s*No\s*[:|-]?\s*[A-Z0-9_-]+/gi, '').trim().replace(/^[:\s-]+/, '').trim() : '';
+        let subjectHtml = subjVal ? `<span class="td-elog-subject">${safeEscape(subjVal)}</span>` : '';
+
+        let recipientsMeta = `<b>To</b> ${safeEscape(toVal)}`;
+        if (ccVal) recipientsMeta += ` &bull; <b>Cc</b> ${safeEscape(ccVal)}`;
+        if (bccVal) recipientsMeta += ` &bull; <b>Bcc</b> ${safeEscape(bccVal)}`;
+
+        let bodySection = '';
+        if (descText) {
+            const tmplId = `elog-tmpl-${idx}-${Math.random().toString(36).substring(7)}`;
+            if (isHtml) {
+                bodySection = `
+                    <div class="td-email-template-wrapper" id="${tmplId}">
+                        <div class="td-email-template-inner">
+                            ${descText}
+                        </div>
+                    </div>
+                    <button type="button" class="td-email-toggle-btn" onclick="window.toggleEmailTemplate('${tmplId}', this)">
+                        <i class="ti ti-mail-opened"></i> <span>Show Email Template</span>
+                    </button>
+                `;
+            } else {
+                const plainText = cleanTextSummary(descText);
+                const isLong = plainText.length > 150;
+                bodySection = `
+                    <div style="font-size:12px;color:var(--td-muted,#6b7290);margin-top:6px;background:var(--td-surface-2,#f4f6fb);padding:8px 10px;border-radius:6px;border:1px solid var(--td-line,#e2e6f0);">
+                        ${safeEscape(isLong ? plainText.substring(0, 150) + '...' : plainText)}
+                    </div>
+                `;
+            }
+        }
+
+        row.innerHTML = `
+            <div class="td-elog-icon"><i class="ti ti-mail"></i></div>
+            <div class="td-elog-body">
+                <div class="td-elog-top">
+                    ${subjectHtml}
+                    <span class="td-elog-status ${em.status === 'fail' ? 'fail' : 'sent'}">${safeEscape(em.status_text || em.status)}</span>
+                    <span class="td-elog-time">${formatDateTime(em.creation || new Date())}</span>
+                </div>
+                <div class="td-elog-to">${recipientsMeta}</div>
+                ${bodySection}
+            </div>
+        `;
+        feedEl.appendChild(row);
+    });
+
+    if (flagEl) {
+        flagEl.style.display = hasFailures ? 'inline-block' : 'none';
+        flagEl.title = hasFailures ? 'Delivery issue detected' : '';
+    }
+}
+
+function renderTicketActivity(activity) {
+    const feedEl = document.getElementById('sd-activity-log-feed');
+    const countEl = document.getElementById('td-activity-count');
+    const listEl = document.getElementById('sd-timeline-list');
+
+    const list = Array.isArray(activity) ? activity : [];
+    if (countEl) countEl.textContent = list.length;
+
+    if (feedEl) {
+        feedEl.innerHTML = '';
+        if (!list.length) {
+            feedEl.innerHTML = '<div class="td-empty-msg">No activity recorded yet.</div>';
+        } else {
+            let html = '';
+            list.forEach((act, idx) => {
+                const rawType = (act.type || act.title || 'comment').toLowerCase();
+                const descText = act.description || act.content || '';
+
+                const hasTemplateHtml = typeof descText === 'string' && (descText.includes('<table') || descText.includes('<div') || descText.includes('<html>') || descText.includes('<!DOCTYPE') || descText.includes('<style'));
+                const isEmailEvent = rawType.includes('communication') || rawType.includes('notification') || rawType.includes('email') || (act.recipients && act.recipients !== 'N/A') || act.to || (hasTemplateHtml && descText.length > 250);
+
+                let iconClass = 'ti ti-message-circle';
+                let rowClass = 'comment';
+                let categoryName = 'Comment';
+                let categoryBadgeClass = 'comment';
+
+                if (rawType.includes('create')) {
+                    iconClass = 'ti ti-circle-plus';
+                    rowClass = 'created';
+                    categoryName = 'Ticket Created';
+                    categoryBadgeClass = 'created';
+                } else if (rawType.includes('file') || rawType.includes('attach')) {
+                    iconClass = 'ti ti-paperclip';
+                    rowClass = 'file';
+                    categoryName = 'Attachment';
+                    categoryBadgeClass = 'file';
+                } else if (rawType.includes('status')) {
+                    iconClass = 'ti ti-refresh';
+                    rowClass = 'status';
+                    categoryName = 'Status Change';
+                    categoryBadgeClass = 'status';
+                } else if (isEmailEvent) {
+                    iconClass = 'ti ti-mail';
+                    rowClass = 'email';
+                    categoryName = 'Email Notification';
+                    categoryBadgeClass = 'email';
+                }
+
+                const byName = act.by || act.sender_full_name || act.sender || 'System';
+                const stamp = act.timestamp || act.creation || '';
+                const relTime = formatRelativeTime(stamp);
+
+                let contentHtml = '';
+                if (isEmailEvent) {
+                    const tmplId = `act-tmpl-${idx}-${Math.random().toString(36).substring(7)}`;
+                    const toVal = act.recipients || act.to || '';
+                    const ccVal = act.cc || '';
+                    const bccVal = act.bcc || '';
+                    const cleanSum = cleanTextSummary(descText);
+                    let rawSubj = act.subject || '';
+                    let subjVal = rawSubj ? rawSubj.replace(/Ticket\s*No\s*[:|-]?\s*[A-Z0-9_-]+/gi, '').trim().replace(/^[:\s-]+/, '').trim() : '';
+                    let subjectLine = subjVal ? `<div style="font-size:13px;font-weight:700;color:var(--td-text,#161b2c);margin-bottom:4px;">${safeEscape(subjVal)}</div>` : '';
+
+                    contentHtml = `
+                        <div style="font-size:12px;color:var(--td-muted,#6b7290);margin-top:6px;background:var(--td-surface-2,#f4f6fb);padding:8px 12px;border-radius:8px;border:1px solid var(--td-line,#e2e6f0);line-height:1.5;">
+                            ${subjectLine}
+                            <div style="display:flex;flex-wrap:wrap;gap:12px;color:var(--td-muted,#6b7290);">
+                                ${toVal ? `<div><b>To:</b> ${safeEscape(toVal)}</div>` : ''}
+                                ${ccVal ? `<div><b>Cc:</b> ${safeEscape(ccVal)}</div>` : ''}
+                                ${bccVal ? `<div><b>Bcc:</b> ${safeEscape(bccVal)}</div>` : ''}
+                            </div>
+                        </div>
+                        <div class="td-email-template-wrapper" id="${tmplId}">
+                            <div class="td-email-template-inner">
+                                ${descText}
+                            </div>
+                        </div>
+                        <button type="button" class="td-email-toggle-btn" onclick="window.toggleEmailTemplate('${tmplId}', this)">
+                            <i class="ti ti-mail-opened"></i> <span>Show Email Template</span>
+                        </button>
+                    `;
+                } else if (act.is_html || (typeof descText === 'string' && (descText.includes('<a ') || descText.includes('📎')))) {
+                    contentHtml = `<div class="td-log-content">${descText}</div>`;
+                } else {
+                    const safe = safeEscape(descText).replace(/\n/g, '<br>');
+                    contentHtml = `<div class="td-log-content">${safe}</div>`;
+                }
+
+                html += `
+                    <div class="td-log-row ${rowClass}">
+                        <div class="td-log-icon ${rowClass}"><i class="${iconClass}"></i></div>
+                        <div class="td-log-body">
+                            <div class="td-log-row-top">
+                                <span class="td-log-name">${safeEscape(byName)}</span>
+                                <span class="td-cat-badge ${categoryBadgeClass}">${safeEscape(categoryName)}</span>
+                                <span class="td-log-time">${relTime}</span>
+                            </div>
+                            ${contentHtml}
+                        </div>
+                    </div>
+                `;
+            });
+            feedEl.innerHTML = html;
+        }
+    }
+
+    if (listEl) {
+        if (!list.length) {
+            listEl.innerHTML = '<div style="padding:16px;text-align:center;color:var(--ink-soft);font-size:13px;">No updates recorded yet.</div>';
+        } else if (typeof _buildTimelineHTML === 'function') {
+            listEl.innerHTML = _buildTimelineHTML(list);
+        }
+    }
+}
+
+window.toggleEmailExpand = function (btn) {
+    const wrapper = btn.previousElementSibling;
+    if (!wrapper) return;
+    const isCollapsed = wrapper.classList.contains('collapsed');
+    const labelSpan = btn.querySelector('span');
+
+    if (isCollapsed) {
+        wrapper.classList.remove('collapsed');
+        btn.classList.add('expanded');
+        if (labelSpan) labelSpan.textContent = 'Show Less';
+    } else {
+        wrapper.classList.add('collapsed');
+        btn.classList.remove('expanded');
+        if (labelSpan) labelSpan.textContent = 'Show More';
+    }
+};
 
 let sdReplyUploadedFiles = [];
 
 function handleReplyFileUpload(e) {
     const files = Array.from(e.target.files || []);
+    const ticketName = window.currentPortalTicketName;
     if (!files.length) return;
 
-    const ticketName = window.currentPortalTicketName;
-
     files.forEach(file => {
-        frappe.call({
-            method: "customer_portal.api.upload_portal_attachment",
-            args: {
-                attached_to_doctype: "Issue",
-                attached_to_name: ticketName || ""
-            },
-            files: { file: file },
-            callback: function (r) {
-                if (r.message && r.message.status === "success") {
-                    sdReplyUploadedFiles.push({
-                        file_url: r.message.file_url,
-                        name: r.message.name,
-                        file_name: r.message.file_name || file.name
-                    });
-                    renderSdReplyAttachmentsPreview();
+        const item = {
+            name: file.name,
+            file_name: file.name,
+            file: file,
+            uploading: true,
+            file_url: null,
+            error: false
+        };
+        sdReplyUploadedFiles.push(item);
+
+        const onUploadSuccess = (fileData) => {
+            item.name = fileData.name || item.name;
+            item.file_url = fileData.file_url;
+            item.file_name = fileData.file_name || item.file_name;
+            item.uploading = false;
+            renderSdReplyAttachmentsPreview();
+        };
+
+        const onUploadError = (err) => {
+            item.error = true;
+            item.uploading = false;
+            showPortalToast(`Failed to upload ${item.file_name}`, 'error');
+            renderSdReplyAttachmentsPreview();
+        };
+
+        if (typeof frappe !== 'undefined' && typeof frappe.upload_file === 'function') {
+            frappe.upload_file(file, {
+                doctype: 'Issue',
+                docname: ticketName || '',
+                is_private: 0
+            }, function (r) {
+                if (r && (r.file_url || r.name)) {
+                    onUploadSuccess(r);
                 } else {
-                    const reader = new FileReader();
-                    reader.onload = function (evt) {
-                        frappe.call({
-                            method: "customer_portal.api.upload_portal_attachment",
-                            args: {
-                                filename: file.name,
-                                filedata: evt.target.result,
-                                attached_to_doctype: "Issue",
-                                attached_to_name: ticketName || ""
-                            },
-                            callback: function (res) {
-                                if (res.message && res.message.status === "success") {
-                                    sdReplyUploadedFiles.push({
-                                        file_url: res.message.file_url,
-                                        name: res.message.name,
-                                        file_name: res.message.file_name || file.name
-                                    });
-                                    renderSdReplyAttachmentsPreview();
-                                } else {
-                                    alert("Failed to upload " + file.name);
-                                }
-                            }
-                        });
-                    };
-                    reader.readAsDataURL(file);
+                    onUploadError(r);
                 }
+            });
+        } else {
+            const formData = new FormData();
+            if (ticketName) {
+                formData.append('attached_to_doctype', 'Issue');
+                formData.append('attached_to_name', ticketName);
             }
-        });
+            formData.append('file', file);
+
+            fetch('/api/method/customer_portal.api.upload_portal_attachment', {
+                method: 'POST',
+                headers: {
+                    'X-Frappe-CSRF-Token': (window.frappe && frappe.csrf_token) || ''
+                },
+                body: formData
+            })
+                .then(res => res.json())
+                .then(data => {
+                    const resObj = data.message || data;
+                    if (resObj && (resObj.file_url || resObj.name)) {
+                        onUploadSuccess(resObj);
+                    } else {
+                        onUploadError(data);
+                    }
+                })
+                .catch(err => onUploadError(err));
+        }
     });
+
+    renderSdReplyAttachmentsPreview();
     e.target.value = '';
 }
 
-function removeSdReplyFile(idx) {
+function removeSdReplyAttachment(idx) {
     sdReplyUploadedFiles.splice(idx, 1);
     renderSdReplyAttachmentsPreview();
 }
+window.removeSdReplyAttachment = removeSdReplyAttachment;
 
 function renderSdReplyAttachmentsPreview() {
     const wrap = document.getElementById('sd-reply-attachments-preview');
     if (!wrap) return;
     wrap.replaceChildren();
 
-    sdReplyUploadedFiles.forEach((file, idx) => {
-        const item = cel('div', {
-            style: 'display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:var(--surface);border:1px solid var(--line);border-radius:16px;font-size:12px;color:var(--ink);'
-        }, [
-            cel('i', { class: 'ti ti-paperclip', style: 'color:var(--indigo);' }),
-            cel('span', { textContent: file.file_name, style: 'max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' }),
-            cel('button', {
-                type: 'button',
-                style: 'border:none;background:none;cursor:pointer;color:var(--ink-soft);padding:0 2px;display:flex;align-items:center;',
-                onclick: () => removeSdReplyFile(idx)
-            }, [
-                cel('i', { class: 'ti ti-x', style: 'font-size:14px;' })
-            ])
-        ]);
-        wrap.appendChild(item);
-    });
-}
-
-function handleDirectAttachmentUpload(e) {
-    const files = Array.from(e.target.files || []);
-    const ticketName = window.currentPortalTicketName;
-    if (!files.length || !ticketName) {
-        if (!ticketName) alert("No active ticket selected.");
+    if (!sdReplyUploadedFiles || !sdReplyUploadedFiles.length) {
+        wrap.style.display = 'none';
         return;
     }
 
-    let completed = 0;
-    const total = files.length;
+    wrap.style.display = 'flex';
 
-    const onComplete = () => {
-        completed++;
-        if (completed === total) {
-            frappe.call({
-                method: 'customer_portal.api.get_ticket_details',
-                args: { ticket_name: ticketName },
-                callback: function (r) {
-                    if (r && r.message && !r.message.error) {
-                        const d = r.message;
-                        renderTicketAttachments(d.attachments || []);
-                        renderTicketActivity(d.activity || []);
-                    }
-                }
-            });
+    sdReplyUploadedFiles.forEach((f, idx) => {
+        const ext = (f.file_name || f.name || '').split('.').pop().toUpperCase() || 'FILE';
+        const isImg = ['JPG', 'JPEG', 'PNG', 'GIF', 'WEBP', 'SVG'].includes(ext) || (f.file && f.file.type && f.file.type.startsWith('image/'));
+
+        let previewUrl = f.file_url;
+        if (!previewUrl && f.file && f.file instanceof File) {
+            try {
+                previewUrl = URL.createObjectURL(f.file);
+            } catch (e) { }
         }
-    };
 
-    files.forEach(file => {
+        let leadingIcon = `<i class="ti ti-paperclip" style="color:var(--indigo,#4f46e5);font-size:15px;flex-shrink:0;"></i>`;
+        if (isImg && previewUrl) {
+            leadingIcon = `<img src="${previewUrl}" alt="Preview" style="width:24px;height:24px;border-radius:4px;object-fit:cover;flex-shrink:0;">`;
+        } else if (isImg) {
+            leadingIcon = `<i class="ti ti-photo" style="color:var(--indigo,#4f46e5);font-size:15px;flex-shrink:0;"></i>`;
+        }
+
+        let statusIcon = `<i class="ti ti-x" style="cursor:pointer;margin-left:6px;color:var(--td-faint,#9aa0b8);font-size:14px;" title="Remove" onclick="window.removeSdReplyAttachment(${idx})"></i>`;
+
+        if (f.uploading) {
+            statusIcon = `<i class="ti ti-loader-2" style="animation:spin 1s linear infinite;margin-left:6px;color:#2563eb;"></i>`;
+        } else if (f.error) {
+            statusIcon = `<i class="ti ti-alert-circle" style="margin-left:6px;color:#dc2626;" title="Upload failed"></i><i class="ti ti-x" style="cursor:pointer;margin-left:4px;" onclick="window.removeSdReplyAttachment(${idx})"></i>`;
+        }
+
+        const chip = cel('div', {
+            style: 'display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:var(--indigo-wash,#f5f3ff);color:var(--indigo,#4f46e5);border-radius:16px;font-size:11.5px;font-weight:600;margin-top:6px;margin-right:6px;',
+            innerHTML: `
+                ${leadingIcon}
+                <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;" title="${safeEscape(f.file_name || f.name)}">${safeEscape(f.file_name || f.name)}</span>
+                ${statusIcon}
+            `
+        });
+        wrap.appendChild(chip);
+    });
+}
+
+async function handleDirectAttachmentUpload(e) {
+    const files = Array.from(e.target.files || []);
+    const ticketName = window.currentPortalTicketName;
+    if (!files.length) return;
+    if (!ticketName) {
+        showPortalToast('No active ticket selected.', 'error');
+        return;
+    }
+
+    showPortalToast(`Uploading ${files.length} attachment(s)...`, 'info');
+
+    let uploadedCount = 0;
+    for (const file of files) {
+        try {
+            const formData = new FormData();
+            formData.append('attached_to_doctype', 'Issue');
+            formData.append('attached_to_name', ticketName);
+            formData.append('file', file);
+
+            const res = await fetch('/api/method/customer_portal.api.upload_portal_attachment', {
+                method: 'POST',
+                headers: {
+                    'X-Frappe-CSRF-Token': frappe.csrf_token || ''
+                },
+                body: formData
+            });
+            const data = await res.json();
+            const result = data.message || data;
+            if (result && (result.file_url || result.status === 'success')) {
+                uploadedCount++;
+            } else if (data.exception) {
+                showPortalToast(data.exception || `Failed to upload ${file.name}`, 'error');
+            }
+        } catch (err) {
+            console.error('Direct attachment upload error:', err);
+        }
+    }
+
+    e.target.value = '';
+
+    if (uploadedCount > 0) {
+        showPortalToast(`Successfully uploaded ${uploadedCount} attachment(s)!`, 'success');
+        // Refresh ticket details to render new attachments immediately
         frappe.call({
-            method: "customer_portal.api.upload_portal_attachment",
-            args: {
-                attached_to_doctype: "Issue",
-                attached_to_name: ticketName
-            },
-            files: { file: file },
-            callback: function (r) {
-                if (r.message && r.message.status === "success") {
-                    onComplete();
-                } else {
-                    const reader = new FileReader();
-                    reader.onload = function (evt) {
-                        frappe.call({
-                            method: "customer_portal.api.upload_portal_attachment",
-                            args: {
-                                filename: file.name,
-                                filedata: evt.target.result,
-                                attached_to_doctype: "Issue",
-                                attached_to_name: ticketName
-                            },
-                            callback: function (res) {
-                                if (res.message && res.message.status === "success") {
-                                    onComplete();
-                                } else {
-                                    alert("Failed to upload " + file.name);
-                                    onComplete();
-                                }
-                            }
-                        });
-                    };
-                    reader.readAsDataURL(file);
+            method: 'customer_portal.api.get_ticket_details',
+            args: { ticket_name: ticketName },
+            callback: function (res) {
+                if (res && res.message && typeof openTicketDetail === 'function') {
+                    openTicketDetail(res.message, true);
                 }
             }
         });
-    });
-
-    e.target.value = '';
+    } else {
+        showPortalToast('Failed to upload attachment(s).', 'error');
+    }
 }
 
 function submitPortalTicketReply() {
     const ticketName = window.currentPortalTicketName;
     const inputEl = document.getElementById('sd-reply-input');
     const btnEl = document.getElementById('sd-reply-submit-btn');
-    if (!ticketName) return;
-    if (btnEl && btnEl.disabled) return;
+    if (!ticketName || !inputEl) return;
 
-    const replyText = inputEl ? inputEl.value.trim() : '';
-    if (!replyText && !sdReplyUploadedFiles.length) {
-        alert('Please type a message or attach a file before sending your reply.');
+    if (sdReplyUploadedFiles.some(f => f.uploading)) {
+        showPortalToast('Please wait for file upload to complete.', 'info');
         return;
     }
 
-    if (btnEl) {
-        btnEl.disabled = true;
-        btnEl.innerHTML = '<i class="ti ti-loader spin"></i> Sending...';
+    const validAttachments = sdReplyUploadedFiles.filter(f => !f.error && f.file_url);
+
+    const replyText = inputEl.value.trim();
+    if (!replyText && !validAttachments.length) {
+        showPortalToast('Please type a message or attach a file before sending.', 'error');
+        return;
     }
+
+    if (btnEl) btnEl.disabled = true;
 
     frappe.call({
         method: 'customer_portal.api.add_ticket_reply',
         args: {
             ticket_name: ticketName,
             comment_text: replyText || 'Attached file(s)',
-            attachments: JSON.stringify(sdReplyUploadedFiles)
+            attachments: JSON.stringify(validAttachments)
         },
         callback: function (r) {
-            if (btnEl) {
-                btnEl.disabled = false;
-                btnEl.innerHTML = '<i class="ti ti-send"></i> Send Reply';
-            }
-            if (r && r.message && !r.message.error) {
-                if (inputEl) inputEl.value = '';
+            if (btnEl) btnEl.disabled = false;
+            if (r && r.message) {
+                inputEl.value = '';
                 sdReplyUploadedFiles = [];
                 renderSdReplyAttachmentsPreview();
-                const d = r.message;
-                renderTicketActivity(d.activity || []);
-                renderTicketAttachments(d.attachments || []);
-                const pill = document.getElementById('sd-status-pill');
-                if (pill && d.status) {
-                    pill.textContent = d.status;
-                    pill.className = `pf-pill ${getTicketStatusClass(d.status)}`;
-                }
-            } else if (r && r.message && r.message.error) {
-                alert(r.message.error);
+                showPortalToast('Reply submitted successfully!', 'success');
+                // Refresh ticket details
+                frappe.call({
+                    method: 'customer_portal.api.get_ticket_details',
+                    args: { ticket_name: ticketName },
+                    callback: function (res) {
+                        if (res && res.message && typeof openTicketDetail === 'function') {
+                            openTicketDetail(res.message, true);
+                        }
+                    }
+                });
             }
         },
-        error: function (err) {
-            if (btnEl) {
-                btnEl.disabled = false;
-                btnEl.innerHTML = '<i class="ti ti-send"></i> Send Reply';
-            }
+        error: function () {
+            if (btnEl) btnEl.disabled = false;
+            showPortalToast('Failed to submit reply.', 'error');
         }
     });
 }
 
-function renderTicketAttachments(attachments) {
-    const listEl = document.getElementById('sd-attachments-list');
+window.handleDirectAttachmentUpload = handleDirectAttachmentUpload;
+window.handleReplyFileUpload = handleReplyFileUpload;
+window.submitPortalTicketReply = submitPortalTicketReply;
 
+function renderContactDetails(contacts, fallbackName, fallbackEmail) {
+    const listEl = document.getElementById('sd-contacts-list');
     if (!listEl) return;
+
     listEl.innerHTML = '';
-    if (!attachments || !attachments.length) {
-        listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--ink-soft);font-size:13px;">No attachments for this ticket.</div>';
+    let items = Array.isArray(contacts) ? [...contacts] : [];
+    window.currentTicketContacts = items;
+
+    if (!items.length && (fallbackName || fallbackEmail)) {
+        items.push({
+            person_name: fallbackName || fallbackEmail,
+            designation: 'Primary Contact',
+            email_id: fallbackEmail || '',
+            mobile_no: '',
+            is_primary: 1
+        });
+    }
+
+    if (!items.length) {
+        listEl.innerHTML = '<div style="color:var(--ink-soft);font-size:13px;text-align:center;padding:12px;">No contact persons linked.</div>';
         return;
     }
-    attachments.forEach(att => {
-        const item = cel('a', {
-            class: 'pf-attachment-chip',
-            href: att.file_url,
-            target: '_blank',
-            style: 'display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--ink);font-size:13px;transition:all .2s ease;'
-        }, [
-            cel('i', { class: 'ti ti-file-text', style: 'font-size:18px;color:var(--indigo);' }),
-            cel('div', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' }, [
-                cel('div', { style: 'font-weight:600;', textContent: att.file_name || 'Attachment' }),
-                cel('div', { style: 'font-size:11px;color:var(--ink-soft);', textContent: att.creation ? formatDate(att.creation) : '' })
-            ]),
-            cel('i', { class: 'ti ti-download', style: 'color:var(--ink-soft);' })
+
+    items.forEach(c => {
+        const cName = c.person_name || c.name || 'Contact';
+        const displayName = (c.user_name || "").split("-")[0].trim() || c.user_name || "Unnamed Contact";
+        const initials = getInitials(displayName);
+
+        const card = cel('div', { class: 'pf-contact-card', style: 'display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;border:1px solid var(--line);margin-bottom:8px;' }, [
+            cel('div', { class: 'pf-contact-av', style: 'width:34px;height:34px;border-radius:50%;background:var(--indigo-subtle,#e0e7ff);color:var(--indigo,#4f46e5);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;' }, [initials]),
+            cel('div', { class: 'pf-contact-body', style: 'flex:1;min-width:0;' }, [
+                cel('div', { class: 'pf-contact-name', style: 'font-weight:600;font-size:13px;', textContent: displayName }),
+                c.designation ? cel('div', { class: 'pf-contact-desig', style: 'font-size:11.5px;color:var(--ink-soft);', textContent: c.designation }) : null,
+                c.email_id ? cel('div', { class: 'pf-contact-meta', style: 'font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;' }, [
+                    cel('i', { class: 'ti ti-mail' }),
+                    cel('span', { textContent: c.email_id })
+                ]) : null,
+                c.mobile_no ? cel('div', { class: 'pf-contact-meta', style: 'font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;' }, [
+                    cel('i', { class: 'ti ti-phone' }),
+                    cel('span', { textContent: c.mobile_no })
+                ]) : null,
+                c.tpoc ? cel('div', { style: 'margin-top:4px;' }, [
+                    cel('span', { class: 'tpoc-badge-green', style: 'font-size:10px;padding:2px 6px;', textContent: '✓ TPOC' })
+                ]) : null
+            ])
         ]);
-        listEl.appendChild(item);
+        listEl.appendChild(card);
     });
 }
 
-function _buildTimelineHTML(items) {
-    if (!items || !items.length) {
-        return '<div class="tl-empty"><p style="color:var(--ink-soft);font-size:13px;margin:0;padding:16px;text-align:center;">No activity found.</p></div>';
-    }
 
-    const getActivityIcon = (type) => {
-        const icons = {
-            "Comment": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>',
-            "Communication": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="2,4 12,13 22,4"/></svg>',
-            "Notification": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
-            "Status Change": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>',
-            "Created": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-            "Document Created": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-            "Assigned": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
-            "File Attached": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>',
-            "Info Added": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
-            "Time Log": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-        };
-        return icons[type] || icons["Status Change"];
-    };
-
-    const getActivityColor = (type) => {
-        const colors = {
-            "Comment": "td-comment",
-            "Communication": "td-comment",
-            "Notification": "td-comment",
-            "Status Change": "td-status",
-            "Created": "td-create",
-            "Document Created": "td-create",
-            "Assigned": "td-assign",
-            "Assignment Completed": "td-assign",
-            "File Attached": "td-vendor",
-            "Attachment": "td-vendor",
-            "Info Added": "td-assign",
-            "Info": "td-assign",
-            "Time Log": "td-status",
-        };
-        return colors[type] || "td-status";
-    };
-
-    const formatRelativeTime = (timestamp) => {
-        if (!timestamp) return "";
-        const now = new Date();
-        const date = new Date(timestamp);
-        if (isNaN(date.getTime())) return timestamp;
-        const diffMs = now - date;
-        const diffMins = Math.floor(diffMs / 60000);
-        const diffHours = Math.floor(diffMins / 60);
-        const diffDays = Math.floor(diffHours / 24);
-        if (diffMins < 1) return "now";
-        if (diffMins < 60) return `${diffMins}m ago`;
-        if (diffHours < 24) return `${diffHours}h ago`;
-        if (diffDays < 7) return `${diffDays}d ago`;
-        return formatDate(timestamp);
-    };
-
-    const escapeHtml = (str) => {
-        return String(str || "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;");
-    };
-
-    const itemsForStatus = [...items].reverse();
-    let _trackedStatus = 'Created';
-    itemsForStatus.forEach(item => {
-        if (item.type === 'Status Change' && item.description) {
-            const m = item.description.match(/from\s+(.+?)\s+to\s+(.+?)\.?$/i);
-            if (m) {
-                item._statusAtTime = m[2].replace(/\.$/, '').trim();
-                _trackedStatus = item._statusAtTime;
-                return;
-            }
-        }
-        item._statusAtTime = _trackedStatus;
-    });
-
-    return items.map((row, idx) => {
-        const dotClass = getActivityColor(row.type);
-        const icon = getActivityIcon(row.type);
-        const connector = idx < items.length - 1 ? '<div class="tl-connector"></div>' : '';
-        const title = escapeHtml(row.title || row.type || "Activity");
-        const by = escapeHtml(row.by || "System");
-        const stamp = row.timestamp || "";
-        const displayStamp = row.display ? escapeHtml(row.display) : escapeHtml(formatDate(stamp));
-        const relativeTime = formatRelativeTime(stamp);
-
-        const statusAtTime = row._statusAtTime || '';
-        const statusSlug = statusAtTime.toLowerCase().replace(/\s+/g, '-');
-        const statusBadgeHtml = statusAtTime
-            ? `<span class="tl-cur-status tl-status-badge tl-status-${statusSlug}" title="Ticket status at this point">${escapeHtml(statusAtTime)}</span>`
-            : '';
-
-        let contentHtml = '';
-        if (row.description) {
-            const desc = row.description;
-            const t = row.type || '';
-            const isHtmlContent = row.is_html || t === 'File Attached' || t === 'Attachment' || (typeof desc === 'string' && (desc.includes('<a ') || desc.includes('📎')));
-
-            if (isHtmlContent && t !== 'Comment') {
-                let emailMetaHtml = '';
-                if (t === 'Communication') {
-                    const toVal = escapeHtml(row.recipients || '');
-                    const ccVal = escapeHtml(row.cc || '');
-                    const subjVal = escapeHtml(row.subject || '');
-                    const toRows = toVal ? `<div class="tl-email-meta-row"><span class="tl-email-meta-label">To</span><span class="tl-email-meta-value">${toVal}</span></div>` : '';
-                    const ccRows = ccVal ? `<div class="tl-email-meta-row"><span class="tl-email-meta-label">CC</span><span class="tl-email-meta-value">${ccVal}</span></div>` : '';
-                    const subjRow = subjVal ? `<div class="tl-email-meta-row tl-email-meta-subject"><span class="tl-email-meta-label">Subject</span><span class="tl-email-meta-value">${subjVal}</span></div>` : '';
-                    if (toRows || ccRows || subjRow) {
-                        emailMetaHtml = `<div class="tl-email-meta">${toRows}${ccRows}${subjRow}</div>`;
-                    }
-                }
-
-                const plainText = desc.replace(/<[^>]*>/g, '').trim();
-                if (plainText.length > 150 || desc.length > 300) {
-                    contentHtml = `
-                        ${emailMetaHtml}
-                        <div class="tl-content-html collapsed">${desc}</div>
-                        <button type="button" class="btn-toggle-email" onclick="window.toggleEmailExpand(this)">
-                            <span>Show More</span>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-                        </button>
-                    `;
-                } else {
-                    contentHtml = `${emailMetaHtml}<div class="tl-content-html">${desc}</div>`;
-                }
-            } else if (t === 'Comment') {
-                const hasHtmlLinks = (typeof desc === 'string' && (desc.includes('<a ') || desc.includes('📎')));
-                const safe = hasHtmlLinks ? desc : escapeHtml(desc).replace(/\n/g, '<br>');
-                contentHtml = `<div class="tl-comment-bubble">${safe}</div>`;
-            } else if (t === 'Status Change') {
-                const statusBadge = (s) => {
-                    const slug = s.toLowerCase().replace(/\s+/g, '-');
-                    return `<span class="tl-status-badge tl-status-${slug}">${escapeHtml(s)}</span>`;
-                };
-                const m = desc.match(/from\s+(.+?)\s+to\s+(.+?)\.?$/i);
-                let safe;
-                if (m) {
-                    const fromStatus = m[1].trim();
-                    const toStatus = m[2].replace(/\.$/, '').trim();
-                    safe = `${statusBadge(fromStatus)}<span class="tl-status-arrow">→</span>${statusBadge(toStatus)}`;
-                } else {
-                    safe = escapeHtml(desc);
-                }
-                contentHtml = `<div class="tl-desc-line tl-status-change-line">${safe}</div>`;
-            } else if (t.includes('Info') || t === 'Label' || t === 'Label Added') {
-                const safe = escapeHtml(desc).replace(/\n/g, '<br>');
-                contentHtml = `<div class="tl-info-box"><span class="info-label">ℹ️ Info</span><p>${safe}</p></div>`;
-            } else {
-                const safe = escapeHtml(desc).replace(/\n/g, '<br>');
-                contentHtml = `<div class="tl-desc-line">${safe}</div>`;
-            }
-        }
-
-        return `
-            <div class="tl-item">
-                <div class="tl-dot-col">
-                    <div class="tl-dot ${dotClass}">
-                        ${icon}
-                    </div>
-                    ${connector}
-                </div>
-                <div class="tl-body">
-                    <div class="tl-hd">
-                        <div class="tl-hd-left">
-                            <span class="tl-author">${by}</span>
-                            <span class="tl-action">${title}</span>
-                            ${statusBadgeHtml}
-                        </div>
-                        <span class="tl-time" title="${displayStamp}">${relativeTime || displayStamp}</span>
-                    </div>
-                    ${contentHtml}
-                </div>
-            </div>
-        `;
-    }).join("");
-}
-
-window.toggleEmailExpand = function (btn) {
-    const wrapper = btn.previousElementSibling;
-    if (!wrapper) return;
-    const isCollapsed = wrapper.classList.contains("collapsed");
-    if (isCollapsed) {
-        wrapper.classList.remove("collapsed");
-        btn.classList.add("expanded");
-        btn.querySelector("span").textContent = "Show Less";
-    } else {
-        wrapper.classList.add("collapsed");
-        btn.classList.remove("expanded");
-        btn.querySelector("span").textContent = "Show More";
-        wrapper.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-};
-
-function renderTicketActivity(activity) {
-    const listEl = document.getElementById('sd-timeline-list');
-    if (!listEl) return;
-    if (!activity || !activity.length) {
-        listEl.innerHTML = '<div class="tl-empty" style="padding:16px;text-align:center;color:var(--ink-soft);font-size:13px;">No activity found.</div>';
-        return;
-    }
-    listEl.innerHTML = _buildTimelineHTML(activity);
-}
-
-function openContactDetail(contact, skipHash) {
-    const fullName = `${contact.first_name} ${contact.last_name || ''}`.trim();
-    const setText = (id, val) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = val || '-';
-    };
-
-    setText('cd-fullname', fullName);
-    setText('cd-designation-sub', contact.designation || 'Contact');
-
-    const primaryPill = document.getElementById('cd-primary-pill');
-    if (primaryPill) { primaryPill.style.display = contact.is_primary_contact ? '' : 'none'; }
-
-    setText('cd-name-hero', fullName);
-    setText('cd-email-hero', contact.email_id || '-');
-    setText('cd-phone-hero', contact.mobile_no || contact.phone || '-');
-    setText('cd-designation-hero', contact.designation || '-');
-
-    setText('cd-first-name', contact.first_name);
-    setText('cd-last-name', contact.last_name || '-');
-    setText('cd-email', contact.email_id);
-    setText('cd-mobile', contact.mobile_no || '-');
-    setText('cd-phone', contact.phone || '-');
-    setText('cd-designation', contact.designation || '-');
-
-    pfGo('contact-detail', null, true);
-    if (!skipHash && contact) {
-        const identifier = contact.name || contact.first_name;
-        if (identifier) {
-            updateUrlPath('contacts/' + encodeURIComponent(identifier));
-        }
-    }
-}
-
-function handleUrlRoute() {
-    if (!portalData) return;
-
-    let routeStr = '';
-
-    // Check pathname first
-    const currentPath = window.location.pathname;
-    if (currentPath.includes('/customer-portal')) {
-        routeStr = currentPath.replace(/^.*\/customer-portal\/?/, '');
-    }
-
-    // Fallback to hash if pathname clean
-    if (!routeStr && window.location.hash) {
-        routeStr = window.location.hash.replace('#', '').trim();
-    }
-
-    if (!routeStr) {
-        routeStr = 'overview';
-    }
-
-    const parts = routeStr.split('/');
-    const mainTab = parts[0].toLowerCase();
-    const detailId = parts.length > 1 ? decodeURIComponent(parts.slice(1).join('/')) : null;
-
-    const validTabs = ['overview', 'renewals', 'invoices', 'orders', 'support', 'contacts', 'settings'];
-
-    if (!validTabs.includes(mainTab)) {
-        pfGoByName('overview', true);
-        return;
-    }
-
-    if (detailId) {
-        if (mainTab === 'support' && detailId === 'new') {
-            openNewTicketPage(true);
-            return;
-        }
-
-        let found = false;
-        if (mainTab === 'renewals' && portalData.renewals) {
-            const rec = portalData.renewals.find(r => r.name === detailId);
-            if (rec) { openRenewalDetail(rec, true); found = true; }
-        } else if (mainTab === 'invoices' && portalData.invoices) {
-            const rec = portalData.invoices.find(inv => inv.name === detailId);
-            if (rec) { openInvoiceDetail(rec, true); found = true; }
-        } else if (mainTab === 'orders' && portalData.orders) {
-            const rec = portalData.orders.find(o => o.name === detailId);
-            if (rec) { openOrderDetail(rec, true); found = true; }
-        } else if (mainTab === 'support') {
-            const ticketsList = (portalData && portalData.tickets) ? portalData.tickets : (portalData && portalData.support ? portalData.support.tickets : []);
-            let rec = ticketsList ? ticketsList.find(t => t.name === detailId) : null;
-            if (!rec && detailId && detailId !== 'new') {
-                rec = { name: detailId, subject: 'Support Ticket', status: 'Open' };
-            }
-            if (rec) { openTicketDetail(rec, true); found = true; }
-        } else if (mainTab === 'contacts' && portalData.contacts) {
-            const rec = portalData.contacts.find(c => c.name === detailId || c.first_name === detailId || (c.first_name + ' ' + (c.last_name || '')).trim() === detailId);
-            if (rec) { openContactDetail(rec, true); found = true; }
-        }
-
-        if (!found) {
-            pfGoByName(mainTab, true);
-        }
-    } else {
-        pfGoByName(mainTab, true);
-    }
-}
-
-const paginationState = {
-    invoices: { limit: 10, data: [], renderFn: renderInvoicesListItems, containerId: 'invoices-list', sizeId: 'invoice-page-size', countId: 'invoice-record-count', btnId: 'invoice-load-more' },
-    renewals: { limit: 10, data: [], renderFn: renderRenewalsListItems, containerId: 'renewals-list', sizeId: 'renewal-page-size', countId: 'renewal-record-count', btnId: 'renewal-load-more' },
-    orders: { limit: 10, data: [], renderFn: renderOrdersListItems, containerId: 'orders-list', sizeId: 'order-page-size', countId: 'order-record-count', btnId: 'order-load-more' },
-    support: { limit: 10, data: [], renderFn: renderTicketsListItems, containerId: 'support-tickets-list', sizeId: 'support-page-size', countId: 'support-record-count', btnId: 'support-load-more' },
-    contacts: { limit: 10, data: [], renderFn: renderContactsListItems, containerId: 'contacts-list', sizeId: 'contact-page-size', countId: 'contact-record-count', btnId: 'contact-load-more' }
-};
-
-function renderInvoicesListItems(inv) {
-    const row = renderInvoiceRow(inv);
-    const rightBlock = row.querySelector('.pf-row-right');
-    if (rightBlock) {
-        const btn = cel('button', {
-            class: 'pf-invoice-dl-btn',
-            title: 'View / Download Invoice'
-        }, [cel('i', { class: 'ti ti-printer' })]);
-
-        btn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            // Show loading state
-            btn.disabled = true;
-            btn.querySelector('i').className = 'ti ti-loader-2';
-            btn.style.animation = 'spin 1s linear infinite';
-
-            frappe.call({
-                method: 'customer_portal.api.download_invoice_pdf',
-                args: { invoice_name: inv.name },
-                callback: function (r) {
-                    btn.disabled = false;
-                    btn.querySelector('i').className = 'ti ti-printer';
-                    btn.style.animation = '';
-
-                    if (r.message && r.message.pdf_b64) {
-                        // Decode base64 → binary → Blob → blob URL → open in new tab
-                        const b64 = r.message.pdf_b64;
-                        const binary = atob(b64);
-                        const bytes = new Uint8Array(binary.length);
-                        for (let i = 0; i < binary.length; i++) {
-                            bytes[i] = binary.charCodeAt(i);
-                        }
-                        const blob = new Blob([bytes], { type: 'application/pdf' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = r.message.filename || (inv.name + '.pdf');
-                        a.target = '_blank';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        // Revoke after short delay
-                        setTimeout(() => URL.revokeObjectURL(url), 5000);
-                    } else {
-                        frappe.msgprint('Could not generate invoice PDF. Please try again.');
-                    }
-                },
-                error: function (r) {
-                    btn.disabled = false;
-                    btn.querySelector('i').className = 'ti ti-printer';
-                    btn.style.animation = '';
-                    const msg = (r && r.exc_type === 'PermissionError')
-                        ? 'You do not have permission to download this invoice.'
-                        : 'Failed to download invoice. Please try again.';
-                    frappe.msgprint(msg);
-                }
-            });
-        });
-
-        rightBlock.appendChild(btn);
-    }
-    return row;
-}
-
-
-function renderRenewalsListItems(ren) {
-    return renderRenewalRow(ren);
-}
-
-function renderOrdersListItems(order) {
-    return renderOrderSection(order);
-}
-
-function renderTicketsListItems(ticket) {
-    return renderTicketRow(ticket);
-}
-
-function renderContactsListItems(contact) {
-    return renderContactRow(contact);
-}
-
-function changePageSize(pageName) {
-    const state = paginationState[pageName];
-    if (!state) return;
-    const sizeSelect = document.getElementById(state.sizeId);
-    state.limit = sizeSelect ? parseInt(sizeSelect.value, 10) : 10;
-    renderPaginatedList(pageName);
-}
-
-function loadMoreRecords(pageName) {
-    const state = paginationState[pageName];
-    if (!state) return;
-    const sizeSelect = document.getElementById(state.sizeId);
-    const pageSize = sizeSelect ? parseInt(sizeSelect.value, 10) : 10;
-    state.limit += pageSize;
-    renderPaginatedList(pageName);
-}
-
-function renderPaginatedList(pageName) {
-    const state = paginationState[pageName];
-    if (!state) return;
-
-    const listDiv = document.getElementById(state.containerId);
-    if (!listDiv) return;
-    listDiv.replaceChildren();
-
-    const totalCount = state.data.length;
-    const paginatedData = state.data.slice(0, state.limit);
-
-    if (paginatedData.length === 0) {
-        let emptyMsg = "No records found.";
-        if (pageName === 'invoices') emptyMsg = "No invoices found.";
-        else if (pageName === 'renewals') emptyMsg = "No renewals found.";
-        else if (pageName === 'orders') emptyMsg = "No orders found.";
-        else if (pageName === 'support') emptyMsg = "No open support tickets.";
-        else if (pageName === 'contacts') emptyMsg = "No contacts found.";
-        listDiv.appendChild(renderEmptyState(emptyMsg));
-    } else {
-        paginatedData.forEach(item => {
-            const row = state.renderFn(item);
-            listDiv.appendChild(row);
-        });
-    }
-
-    // Update counts and button visibility
-    const recordCountSpan = document.getElementById(state.countId);
-    const loadMoreBtn = document.getElementById(state.btnId);
-    if (recordCountSpan && loadMoreBtn) {
-        const showingCount = Math.min(state.limit, totalCount);
-        recordCountSpan.textContent = `Showing ${showingCount} of ${totalCount}`;
-        if (showingCount >= totalCount) {
-            loadMoreBtn.style.display = 'none';
-        } else {
-            loadMoreBtn.style.display = 'inline-block';
-        }
-    }
-}
-
-function filterRenewals(resetLimit = true) {
-    if (!portalData) return;
-
-    const state = paginationState['renewals'];
-    if (resetLimit) {
-        const sizeSelect = document.getElementById(state.sizeId);
-        state.limit = sizeSelect ? parseInt(sizeSelect.value, 10) : 10;
-    }
-
-    const queryInput = document.getElementById('renewal-search-input');
-    const query = queryInput ? queryInput.value.toLowerCase().trim() : '';
-    const statusSelect = document.getElementById('renewal-status-filter');
-    const status = statusSelect ? statusSelect.value : 'All';
-
-    let filtered = portalData.renewals || [];
-    if (status !== 'All') {
-        filtered = filtered.filter(ren => ren.status === status);
-    }
-    if (query) {
-        filtered = filtered.filter(ren =>
-            (ren.name && ren.name.toLowerCase().includes(query)) ||
-            (ren.product_name && ren.product_name.toLowerCase().includes(query)) ||
-            (ren.invoice_no && ren.invoice_no.toLowerCase().includes(query)) ||
-            (ren.domain_name && ren.domain_name.toLowerCase().includes(query))
-        );
-    }
-
-    state.data = filtered;
-    renderPaginatedList('renewals');
-}
-
-function filterOrders(resetLimit = true) {
-    if (!portalData) return;
-
-    const state = paginationState['orders'];
-    if (resetLimit) {
-        const sizeSelect = document.getElementById(state.sizeId);
-        state.limit = sizeSelect ? parseInt(sizeSelect.value, 10) : 10;
-    }
-
-    const queryInput = document.getElementById('order-search-input');
-    const query = queryInput ? queryInput.value.toLowerCase().trim() : '';
-    const statusSelect = document.getElementById('order-status-filter');
-    const status = statusSelect ? statusSelect.value : 'All';
-
-    let filtered = portalData.orders || [];
-    if (status !== 'All') {
-        filtered = filtered.filter(o => o.status === status);
-    }
-    if (query) {
-        filtered = filtered.filter(o => o.name && o.name.toLowerCase().includes(query));
-    }
-
-    state.data = filtered;
-    renderPaginatedList('orders');
-}
-
-function filterInvoices(resetLimit = true) {
-    if (!portalData) return;
-
-    const state = paginationState['invoices'];
-    if (resetLimit) {
-        const sizeSelect = document.getElementById(state.sizeId);
-        state.limit = sizeSelect ? parseInt(sizeSelect.value, 10) : 10;
-    }
-
-    const queryInput = document.getElementById('invoice-search-input');
-    const query = queryInput ? queryInput.value.toLowerCase().trim() : '';
-    const statusSelect = document.getElementById('invoice-status-filter');
-    const status = statusSelect ? statusSelect.value : 'All';
-
-    let filtered = portalData.invoices || [];
-    if (status === 'Open') {
-        filtered = filtered.filter(inv => inv.outstanding_amount > 0 || (inv.status && inv.status !== 'Paid'));
-    } else if (status !== 'All') {
-        filtered = filtered.filter(inv => inv.status === status);
-    }
-    if (query) {
-        filtered = filtered.filter(inv => inv.name.toLowerCase().includes(query));
-    }
-
-    state.data = filtered;
-    renderPaginatedList('invoices');
-}
-
-function filterTickets() {
-    const queryInput = document.getElementById('ticket-search-input');
-    const query = queryInput ? queryInput.value.toLowerCase().trim() : '';
-    const statusSelect = document.getElementById('ticket-status-filter');
-    const status = statusSelect ? statusSelect.value : 'All';
-    const state = paginationState.support;
-
-    let filtered = portalData.support.tickets || [];
-    if (status === 'Open') {
-        filtered = filtered.filter(t => t.status && t.status !== 'Closed' && t.status !== 'Resolved');
-    } else if (status !== 'All') {
-        filtered = filtered.filter(t => t.status === status);
-    }
-    if (query) {
-        filtered = filtered.filter(t =>
-            t.name.toLowerCase().includes(query) ||
-            (t.subject && t.subject.toLowerCase().includes(query)) ||
-            (t.raised_by && t.raised_by.toLowerCase().includes(query))
-        );
-    }
-
-    state.data = filtered;
-    renderPaginatedList('support');
-}
-
-function openNewTicketPage(skipHash) {
-    pfGo('support-new', null, true);
-    if (!skipHash) {
-        updateUrlPath('support/new');
-    }
-    initCustomerPortalWizard();
-    const subjectInput = document.getElementById('ticket-subject');
-    if (subjectInput) {
-        setTimeout(() => subjectInput.focus(), 250);
-    }
-}
-
-/* ─── CUSTOMER PORTAL SUPPORT TICKET WIZARD ─── */
-let cpWizStep = 1;
-let cpSelectedContacts = [];
+// New Ticket Modal Handlers
+let cpUploadedFiles = [];
 let cpSelectedDept = "";
 let cpSelectedSub = null;
+let cpActiveRenewals = [];
 let cpSelectedQuery = "";
 let cpSelectedPriority = "Medium";
-let cpUploadedFiles = [];
+let cpSelectedContacts = [];
 let cpActiveQueryTypes = null;
 
 const CP_DEPARTMENTS = [
-    { id: "Technical", name: "Technical", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>' },
-    { id: "Accounts Team & Billing", name: "Accounts & Billing", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' },
-    { id: "Sales", name: "Sales", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
-    { id: "Demo", name: "Demo", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
-    { id: "Licence Activation", name: "Licence Activation", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' },
-    { id: "Other", name: "Other", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' }
+    { id: "Technical", name: "Technical", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>' },
+    { id: "Accounts Team & Billing", name: "Accounts & Billing", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' },
+    { id: "Sales", name: "Sales", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
+    { id: "Demo", name: "Demo", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
+    { id: "Licence Activation", name: "Licence Activation", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' },
+    { id: "Other", name: "Other", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' }
 ];
+
+function getCategoryOptions() {
+    if (cpActiveQueryTypes && cpActiveQueryTypes.length > 0) {
+        return cpActiveQueryTypes;
+    }
+    if (portalData && portalData.support && portalData.support.issue_types && portalData.support.issue_types.length > 0) {
+        return portalData.support.issue_types.map(t => ({
+            id: t,
+            name: t,
+            icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
+        }));
+    }
+    return [];
+}
+
+function openNewTicketModal() {
+    initCustomerPortalWizard();
+    cpGoToStep(1);
+    go('ticket-new');
+}
+
+function closeNewTicketModal() {
+    const modal = document.getElementById('modal-new-ticket');
+    if (modal) modal.style.display = 'none';
+}
 
 function initCustomerPortalWizard() {
     if (!portalData) return;
 
-    // Customer & Sales Person auto display
-    const custName = (portalData.customer_info && portalData.customer_info.customer_name) ? portalData.customer_info.customer_name : "-";
-    const salesPerson = (portalData.customer_info && portalData.customer_info.sales_person) ? portalData.customer_info.sales_person : "Default Account Manager";
-
+    const info = portalData.customer_info || {};
     const custEl = document.getElementById('cp-wiz-customer-name');
-    if (custEl) custEl.textContent = custName;
+    if (custEl) custEl.textContent = info.customer_name || 'Valued Customer';
 
-    const salesEl = document.getElementById('cp-wiz-sales-person');
-    if (salesEl) salesEl.textContent = salesPerson;
+    const mgrEl = document.getElementById('cp-wiz-sales-person');
+    if (mgrEl) mgrEl.textContent = info.sales_person || '';
 
-    // Set Default Contact Person to customer's TPOC contact or logged-in user contact
-    const userEmail = (window.userEmail || "").toLowerCase().trim();
+    // Set Default Contact Person to logged-in user contact or primary contact
+    const userEmail = (window.userEmail || (portalData.customer_info && portalData.customer_info.user_email) || "").toLowerCase().trim();
     let defaultContact = null;
 
     if (portalData.contacts && portalData.contacts.length > 0) {
-        // Priority 1: Check for explicit TPOC contact in portalData.contacts (matching ticket_list.js)
-        defaultContact = portalData.contacts.find(c => c.tpoc || c.custom_tpoc);
-
-        // Priority 2: Check for logged-in user email match
-        if (!defaultContact && userEmail) {
+        // Priority 1: Check for logged-in user email match
+        if (userEmail) {
             defaultContact = portalData.contacts.find(c => c.email_id && c.email_id.toLowerCase().trim() === userEmail);
+        }
+
+        // Priority 2: Check for explicit TPOC contact in portalData.contacts
+        if (!defaultContact) {
+            defaultContact = portalData.contacts.find(c => c.tpoc || c.custom_tpoc);
         }
 
         // Priority 3: Check for primary contact
@@ -2992,18 +3512,13 @@ function initCustomerPortalWizard() {
     }
 
     if (defaultContact) {
-        defaultContact = { ...defaultContact, tpoc: 1, custom_tpoc: 1 };
-        // Sync to portalData.contacts so modal check is true as well
-        const pContact = portalData.contacts.find(c => c.name === defaultContact.name || (c.email_id && c.email_id === defaultContact.email_id));
-        if (pContact) {
-            pContact.tpoc = 1;
-            pContact.custom_tpoc = 1;
-        }
+        const isDefaultTpoc = Boolean(defaultContact.tpoc || defaultContact.custom_tpoc);
+        defaultContact = { ...defaultContact, tpoc: isDefaultTpoc ? 1 : 0, custom_tpoc: isDefaultTpoc ? 1 : 0 };
     } else {
         defaultContact = {
-            first_name: window.userEmail ? window.userEmail.split('@')[0] : "Customer",
+            first_name: userEmail ? userEmail.split('@')[0] : (info.user_fullname || "Customer"),
             last_name: "",
-            email_id: window.userEmail || "customer@example.com",
+            email_id: userEmail || info.user_email || "",
             phone: "",
             designation: "Contact Person",
             tpoc: 1,
@@ -3013,29 +3528,44 @@ function initCustomerPortalWizard() {
     }
 
     cpSelectedContacts = [defaultContact];
-    cpRenderContactCard();
 
-    // Department & Active Subscription & Query Cards (NO default department)
-    cpSelectedDept = "";
-    cpRenderSelectedDept();
-
+    cpSelectedDept = "Technical";
     cpSelectedSub = null;
-    cpActiveQueryTypes = null;
-    cpRenderSelectedSub();
-
+    cpActiveRenewals = [];
     cpSelectedQuery = "";
+    cpActiveQueryTypes = null;
+    cpSelectedPriority = "Medium";
+    cpUploadedFiles = [];
+
+    cpRenderSelectedContact();
+    cpRenderSelectedDept();
+    cpRenderSelectedSub();
     cpRenderSelectedQuery();
-
-    // Priority Grid selection default
-    cpSelectPriority(cpSelectedPriority);
-
-    // Reset step
-    cpGoToStep(1);
+    cpSelectPriority('Medium');
+    cpRenderAttachmentsList();
 }
 
-/* ─── CONTACT PERSON MODEL & MULTI-SELECTION ─── */
-function cpRenderContactCard() {
-    const wrap = document.getElementById("cp-wizard-contacts-list");
+function cpResetTicketWizard() {
+    cpUploadedFiles = [];
+    cpSelectedDept = "Technical";
+    cpSelectedSub = null;
+    cpActiveRenewals = [];
+    cpSelectedQuery = "";
+    cpActiveQueryTypes = null;
+    cpSelectedPriority = "Medium";
+    cpSelectedContacts = [];
+
+    const subj = document.getElementById('nt-subject');
+    if (subj) subj.value = '';
+    const desc = document.getElementById('nt-description');
+    if (desc) desc.value = '';
+
+    initCustomerPortalWizard();
+}
+
+/* ─── CONTACT SELECTION & MULTI-CONTACT ADDING ─── */
+function cpRenderSelectedContact() {
+    const wrap = document.getElementById('cp-wizard-contacts-list');
     if (!wrap) return;
     wrap.replaceChildren();
 
@@ -3048,26 +3578,30 @@ function cpRenderContactCard() {
     }
 
     cpSelectedContacts.forEach((c, idx) => {
-        const firstName = c.first_name || "";
-        const lastName = c.last_name || "";
+        const firstName = c.first_name || '';
+        const lastName = c.last_name || '';
         const nameStr = `${firstName} ${lastName}`.trim() || c.name || c.email_id || "Customer Contact";
 
-        let initials = "US";
+        let initials = "CC";
         if (firstName && lastName) {
             initials = (firstName[0] + lastName[0]).toUpperCase();
-        } else if (firstName) {
-            initials = firstName.substring(0, 2).toUpperCase();
         } else if (nameStr) {
             initials = nameStr.substring(0, 2).toUpperCase();
         }
 
-        const subDetails = [
-            c.email_id ? `📧 ${c.email_id}` : '',
-            (c.phone || c.mobile_no) ? `📱 ${c.phone || c.mobile_no}` : '',
-            c.designation ? `· ${c.designation}` : ''
-        ].filter(Boolean).join('  ');
-
         const isTpoc = (c.tpoc || c.custom_tpoc) ? 1 : 0;
+
+        const removeBtn = cel('button', {
+            type: 'button',
+            class: 'cp-cc-remove-btn',
+            title: 'Remove contact',
+            onclick: (e) => {
+                e.stopPropagation();
+                cpRemoveContact(idx);
+            }
+        }, [
+            cel('i', { class: 'ti ti-x' })
+        ]);
 
         const card = cel('div', { class: 'cp-contact-card', style: 'margin-bottom:8px;' }, [
             cel('div', { class: 'cp-cc-avatar', textContent: initials }),
@@ -3076,34 +3610,26 @@ function cpRenderContactCard() {
                     cel('div', { class: 'cp-cc-name', textContent: nameStr }),
                     isTpoc ? cel('span', { class: 'tpoc-badge-green', title: 'Technical Point of Contact', textContent: '✓ TPOC' }) : null
                 ].filter(Boolean)),
-                cel('div', { class: 'cp-cc-sub', textContent: subDetails || 'Contact Details' })
+                cel('div', { class: 'cp-cc-sub', textContent: `${c.email_id || '-'} · ${c.mobile_no || c.phone || '-'} ${c.designation ? '· ' + c.designation : ''}` })
             ]),
-            cel('button', {
-                type: 'button',
-                class: 'cp-cc-remove-btn',
-                title: 'Remove contact',
-                onclick: () => cpRemoveContact(idx)
-            }, [
-                cel('i', { class: 'ti ti-x' })
-            ])
+            removeBtn
         ]);
-
         wrap.appendChild(card);
     });
 }
 
 function cpRemoveContact(idx) {
     cpSelectedContacts.splice(idx, 1);
-    cpRenderContactCard();
+    cpRenderSelectedContact();
+    cpRenderContactsModalList();
 }
 
-/* ─── SUPPORT TICKET CONTACT PICKER MODAL ─── */
 let cpContactModalMode = 'wizard'; // 'wizard' (for ticket creation) or 'detail' (for ticket detail view)
 
 function cpOpenContactModal() {
     cpContactModalMode = 'wizard';
-    const modal = document.getElementById("cp-contact-modal");
-    if (modal) modal.style.display = "flex";
+    const modal = document.getElementById('cp-contact-modal');
+    if (modal) modal.style.display = 'flex';
     cpSwitchContactTab('existing');
 }
 
@@ -3135,124 +3661,8 @@ function cpOpenTicketDetailContactModal() {
 }
 
 function cpCloseContactModal() {
-    const modal = document.getElementById("cp-contact-modal");
-    if (modal) modal.style.display = "none";
-}
-
-function cpSwitchContactTab(tabName) {
-    if (tabName === 'manual') {
-        cpCloseContactModal();
-        openContactWizModal(null);
-        return;
-    }
-    const tabExisting = document.getElementById("cp-ctab-existing");
-    const tabManual = document.getElementById("cp-ctab-manual");
-    const paneExisting = document.getElementById("cp-cpane-existing");
-
-    if (tabExisting) tabExisting.classList.add("active");
-    if (tabManual) tabManual.classList.remove("active");
-    if (paneExisting) paneExisting.classList.add("active");
-    cpRenderContactModalList();
-}
-
-function cpRenderContactModalList() {
-    const list = document.getElementById("cp-contacts-modal-list");
-    if (!list) return;
-    list.replaceChildren();
-
-    const contacts = (portalData && portalData.contacts) ? portalData.contacts : [];
-    if (!contacts.length) {
-        list.appendChild(cel('div', { style: 'padding:16px;text-align:center;color:var(--ink-soft);' }, [
-            document.createTextNode("No existing contacts found for this account. Click 'Add New Contact' to create one.")
-        ]));
-        return;
-    }
-
-    contacts.forEach(c => {
-        const nameStr = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.name || c.email_id;
-        const isSel = cpSelectedContacts.some(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
-        const selObj = cpSelectedContacts.find(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
-        const isTpoc = selObj ? Boolean(selObj.tpoc || selObj.is_primary) : Boolean(c.tpoc || c.custom_tpoc);
-
-        const tpocWrap = cel('div', {
-            style: 'display:flex;align-items:center;gap:4px;margin-right:12px;',
-            onclick: (e) => e.stopPropagation()
-        }, [
-            cel('input', {
-                type: 'checkbox',
-                id: `cp-existing-tpoc-${c.name || c.email_id}`,
-                style: 'width:14px;height:14px;cursor:pointer;accent-color:var(--indigo,#4f46e5);',
-                checked: Boolean(isTpoc),
-                onchange: (e) => {
-                    const val = e.target.checked ? 1 : 0;
-                    c.tpoc = val;
-                    c.custom_tpoc = val;
-                    if (selObj) {
-                        selObj.tpoc = val;
-                        selObj.is_primary = val;
-                        selObj.custom_tpoc = val;
-                    }
-                    if (cpContactModalMode === 'detail' && window.currentPortalTicketName) {
-                        cpSaveTicketDetailContacts();
-                    } else {
-                        cpRenderContactCard();
-                    }
-                }
-            }),
-            cel('label', {
-                for: `cp-existing-tpoc-${c.name || c.email_id}`,
-                style: 'font-size:11px;font-weight:600;color:var(--ink-soft);cursor:pointer;margin-bottom:0;user-select:none;',
-                textContent: 'TPOC'
-            })
-        ]);
-
-        const addBtn = cel('button', {
-            type: 'button',
-            class: 'cp-con-pick-add-btn ' + (isSel ? 'added' : ''),
-            title: isSel ? 'Remove contact' : 'Add contact',
-            onclick: (e) => {
-                e.stopPropagation();
-                cpToggleContact(c);
-            }
-        }, [
-            cel('i', { class: isSel ? 'ti ti-check' : 'ti ti-plus' })
-        ]);
-
-        const item = cel('div', {
-            class: 'cp-contact-modal-item ' + (isSel ? 'selected' : ''),
-            onclick: () => cpToggleContact(c)
-        }, [
-            cel('div', { class: 'cp-cmi-avatar', textContent: (nameStr[0] || 'U').toUpperCase() }),
-            cel('div', { class: 'cp-cmi-info' }, [
-                cel('div', { class: 'cp-cmi-name', textContent: nameStr }),
-                cel('div', { class: 'cp-cmi-sub', textContent: `${c.email_id || ''} ${c.phone || c.mobile_no || ''}`.trim() })
-            ]),
-            tpocWrap,
-            addBtn
-        ]);
-
-        list.appendChild(item);
-    });
-}
-
-function cpToggleContact(c) {
-    const idx = cpSelectedContacts.findIndex(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
-    if (idx >= 0) {
-        cpSelectedContacts.splice(idx, 1);
-    } else {
-        const tpocChk = document.getElementById(`cp-existing-tpoc-${c.name || c.email_id}`);
-        const hasTpoc = cpSelectedContacts.some(sc => sc.tpoc);
-        const isTpoc = tpocChk ? (tpocChk.checked ? 1 : (!hasTpoc ? 1 : 0)) : (c.tpoc || c.custom_tpoc || !hasTpoc ? 1 : 0);
-        cpSelectedContacts.push({ ...c, tpoc: isTpoc });
-    }
-
-    if (cpContactModalMode === 'detail' && window.currentPortalTicketName) {
-        cpSaveTicketDetailContacts();
-    } else {
-        cpCloseContactModal();
-        cpRenderContactCard();
-        cpRenderContactModalList();
-    }
+    const modal = document.getElementById('cp-contact-modal');
+    if (modal) modal.style.display = 'none';
 }
 
 function cpSaveTicketDetailContacts() {
@@ -3272,7 +3682,7 @@ function cpSaveTicketDetailContacts() {
                 const d = r.message;
                 renderContactDetails(d.customer_contacts || [], d.person_name, d.contact_email);
                 showPortalToast("Ticket contacts updated successfully!", "success");
-                cpRenderContactModalList();
+                cpRenderContactsModalList();
             }
         },
         error: function (err) {
@@ -3282,7 +3692,33 @@ function cpSaveTicketDetailContacts() {
     });
 }
 
-/* ─── 5-STEP CONTACT WIZARD MODAL CONTROLLER (Matching customer_list) ─── */
+function showPortalToast(msg, type = "info") {
+    if (typeof frappe !== 'undefined' && frappe.show_alert) {
+        frappe.show_alert({ message: msg, indicator: type === "error" ? "red" : "green" });
+    } else {
+        alert(msg);
+    }
+}
+
+function cpSwitchContactTab(tab) {
+    if (tab === 'manual') {
+        cpCloseContactModal();
+        openContactWizModal(null);
+        return;
+    }
+    const tabExist = document.getElementById('cp-ctab-existing');
+    const tabMan = document.getElementById('cp-ctab-manual');
+    const paneExist = document.getElementById('cp-cpane-existing');
+    const paneMan = document.getElementById('cp-cpane-manual');
+
+    if (tabExist) tabExist.classList.add('active');
+    if (tabMan) tabMan.classList.remove('active');
+    if (paneExist) paneExist.classList.add('active');
+    if (paneMan) paneMan.classList.remove('active');
+    cpRenderContactsModalList();
+}
+
+/* ─── 5-STEP CONTACT WIZARD MODAL CONTROLLER ─── */
 let cpContactWizStep = 1;
 let cpWizContactEmails = [];
 let cpWizContactPhones = [];
@@ -3550,7 +3986,7 @@ function cpRenderModalEmails() {
             cel('div', { style: 'display:flex;gap:6px;' }, [
                 !item.is_primary ? cel('button', {
                     type: 'button',
-                    class: 'pf-btn btn-sm',
+                    class: 'btn secondary btn-sm',
                     style: 'font-size:10px;padding:2px 8px;',
                     onclick: () => {
                         cpWizContactEmails.forEach((e, i) => e.is_primary = (i === idx ? 1 : 0));
@@ -3559,7 +3995,7 @@ function cpRenderModalEmails() {
                 }, [document.createTextNode("Set Primary")]) : null,
                 cel('button', {
                     type: 'button',
-                    class: 'pf-btn btn-sm',
+                    class: 'btn secondary btn-sm',
                     style: 'font-size:10px;padding:2px 6px;color:var(--crimson,#ef4444);',
                     onclick: () => {
                         cpWizContactEmails.splice(idx, 1);
@@ -3619,7 +4055,7 @@ function cpRenderModalPhones() {
             ].filter(Boolean)),
             cel('button', {
                 type: 'button',
-                class: 'pf-btn btn-sm',
+                class: 'btn secondary btn-sm',
                 style: 'font-size:10px;padding:2px 6px;color:var(--crimson,#ef4444);',
                 onclick: () => {
                     cpWizContactPhones.splice(idx, 1);
@@ -3780,7 +4216,7 @@ function cpSaveContactWiz() {
 
                 if (portalData) {
                     if (!portalData.contacts) portalData.contacts = [];
-                    const idx = portalData.contacts.findIndex(c => c.name === updatedContact.name || c.id === updatedContact.name);
+                    const idx = portalData.contacts.findIndex(c => c.name === updatedContact.name || (c.email_id && c.email_id === updatedContact.email_id));
                     if (idx >= 0) {
                         portalData.contacts[idx] = { ...portalData.contacts[idx], ...updatedContact };
                     } else {
@@ -3788,19 +4224,16 @@ function cpSaveContactWiz() {
                     }
                 }
 
-                updateContactsCountUI();
                 showPortalToast(docId ? "Contact updated successfully!" : "Contact created successfully!", "success");
                 cpCloseContactWizModal();
 
-                if (cpContactModalMode === 'detail' && window.currentPortalTicketName) {
-                    const selIdx = cpSelectedContacts.findIndex(c => c.name === updatedContact.name || (c.email_id && c.email_id === updatedContact.email_id));
-                    if (selIdx >= 0) {
-                        cpSelectedContacts[selIdx] = { ...cpSelectedContacts[selIdx], ...updatedContact };
-                    } else {
-                        cpSelectedContacts.push({ ...updatedContact, tpoc: isTpoc });
-                    }
-                    cpSaveTicketDetailContacts();
+                const selIdx = cpSelectedContacts.findIndex(c => c.name === updatedContact.name || (c.email_id && c.email_id === updatedContact.email_id));
+                if (selIdx >= 0) {
+                    cpSelectedContacts[selIdx] = { ...cpSelectedContacts[selIdx], ...updatedContact };
+                } else {
+                    cpSelectedContacts.push({ ...updatedContact, tpoc: isTpoc, custom_tpoc: isTpoc });
                 }
+                cpRenderSelectedContact();
             }
         },
         error: function (err) {
@@ -3813,24 +4246,140 @@ function cpSaveContactWiz() {
     });
 }
 
+function cpRenderContactsModalList() {
+    const list = document.getElementById('cp-contacts-modal-list');
+    if (!list) return;
+    list.replaceChildren();
 
-
-function updateContactsCountUI() {
-    const total = (portalData && portalData.contacts) ? portalData.contacts.length : 0;
-    const subTitle = document.getElementById("contacts-sub-title");
-    if (subTitle) subTitle.textContent = `${total} people on this account`;
-
-    const qaDesc = document.getElementById("qa-contact-desc");
-    if (qaDesc) qaDesc.textContent = `${total} on this account`;
-
-    if (typeof renderPaginatedList === 'function') {
-        renderPaginatedList('contacts');
+    const contacts = (portalData && portalData.contacts) ? portalData.contacts : [];
+    if (!contacts.length) {
+        list.appendChild(cel('div', { style: 'padding:16px;text-align:center;color:var(--ink-soft);font-size:13px;' }, ['No existing contacts found. Click "Add New Contact" to create one.']));
+        return;
     }
+
+    contacts.forEach(c => {
+        const nameStr = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.name || c.email_id;
+        const isSel = cpSelectedContacts.some(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
+        const selObj = cpSelectedContacts.find(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
+        const isTpoc = selObj ? Boolean(selObj.tpoc || selObj.is_primary) : Boolean(c.tpoc || c.custom_tpoc);
+
+        const tpocWrap = cel('div', {
+            style: 'display:flex;align-items:center;gap:4px;margin-right:12px;',
+            onclick: (e) => e.stopPropagation()
+        }, [
+            cel('input', {
+                type: 'checkbox',
+                id: `cp-existing-tpoc-${c.name || c.email_id}`,
+                style: 'width:14px;height:14px;cursor:pointer;accent-color:var(--indigo,#4f46e5);',
+                checked: Boolean(isTpoc),
+                onchange: (e) => {
+                    const val = e.target.checked ? 1 : 0;
+                    c.tpoc = val;
+                    c.custom_tpoc = val;
+                    if (selObj) {
+                        selObj.tpoc = val;
+                        selObj.is_primary = val;
+                        selObj.custom_tpoc = val;
+                    }
+                    cpRenderSelectedContact();
+                }
+            }),
+            cel('label', {
+                for: `cp-existing-tpoc-${c.name || c.email_id}`,
+                style: 'font-size:11px;font-weight:600;color:var(--ink-soft);cursor:pointer;margin-bottom:0;user-select:none;',
+                textContent: 'TPOC'
+            })
+        ]);
+
+        const addBtn = cel('button', {
+            type: 'button',
+            class: 'cp-con-pick-add-btn ' + (isSel ? 'added' : ''),
+            title: isSel ? 'Remove contact' : 'Add contact',
+            onclick: (e) => {
+                e.stopPropagation();
+                cpToggleContact(c);
+            }
+        }, [
+            cel('i', { class: isSel ? 'ti ti-check' : 'ti ti-plus' })
+        ]);
+
+        const item = cel('div', {
+            class: 'cp-contact-modal-item ' + (isSel ? 'selected' : ''),
+            onclick: () => cpToggleContact(c)
+        }, [
+            cel('div', { class: 'cp-cmi-avatar', textContent: (nameStr[0] || 'U').toUpperCase() }),
+            cel('div', { class: 'cp-cmi-info' }, [
+                cel('div', { class: 'cp-cmi-name', textContent: nameStr }),
+                cel('div', { class: 'cp-cmi-sub', textContent: `${c.email_id || ''} ${c.phone || c.mobile_no || ''}`.trim() })
+            ]),
+            tpocWrap,
+            addBtn
+        ]);
+
+        list.appendChild(item);
+    });
+}
+
+function cpToggleContact(c) {
+    const idx = cpSelectedContacts.findIndex(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
+    if (idx >= 0) {
+        cpSelectedContacts.splice(idx, 1);
+    } else {
+        const tpocChk = document.getElementById(`cp-existing-tpoc-${c.name || c.email_id}`);
+        const hasTpoc = cpSelectedContacts.some(sc => sc.tpoc);
+        const isTpoc = tpocChk ? (tpocChk.checked ? 1 : (!hasTpoc ? 1 : 0)) : (c.tpoc || c.custom_tpoc || !hasTpoc ? 1 : 0);
+        cpSelectedContacts.push({ ...c, tpoc: isTpoc });
+    }
+
+    if (typeof cpContactModalMode !== 'undefined' && cpContactModalMode === 'detail' && window.currentPortalTicketName) {
+        if (typeof cpSaveTicketDetailContacts === 'function') cpSaveTicketDetailContacts();
+    } else {
+        cpCloseContactModal();
+        cpRenderSelectedContact();
+        cpRenderContactsModalList();
+    }
+}
+
+function cpSaveNewContact() {
+    const firstName = document.getElementById('cp-nc-first-name')?.value.trim();
+    const lastName = document.getElementById('cp-nc-last-name')?.value.trim();
+    const email = document.getElementById('cp-nc-email')?.value.trim();
+    const mobile = document.getElementById('cp-nc-mobile')?.value.trim();
+    const designation = document.getElementById('cp-nc-designation')?.value.trim();
+
+    if (!firstName || !email) {
+        alert('Please fill in First Name and Email Address.');
+        return;
+    }
+
+    const tpocChk = document.getElementById('cp-nc-tpoc');
+    const isTpoc = tpocChk && tpocChk.checked ? 1 : 0;
+
+    const newContact = {
+        name: email,
+        first_name: firstName,
+        last_name: lastName,
+        email_id: email,
+        mobile_no: mobile,
+        designation: designation,
+        is_primary: isTpoc ? true : false,
+        tpoc: isTpoc,
+        custom_tpoc: isTpoc
+    };
+
+    if (portalData) {
+        if (!portalData.contacts) portalData.contacts = [];
+        portalData.contacts.push(newContact);
+    }
+
+    cpSelectedContacts.push(newContact);
+    cpRenderSelectedContact();
+    cpCloseContactModal();
 }
 
 /* ─── DEPARTMENT MODEL CARD & MODAL ─── */
 function cpRenderSelectedDept() {
-    const card = document.getElementById("cp-selected-dept-card");
+    const card = document.getElementById('cp-selected-dept-card');
     if (!card) return;
     card.replaceChildren();
 
@@ -3838,9 +4387,9 @@ function cpRenderSelectedDept() {
         card.className = "selected-model-card placeholder-state";
         card.style.borderStyle = "dashed";
         card.appendChild(cel('div', { class: 'smc-left' }, [
-            cel('div', { class: 'smc-ico placeholder', innerHTML: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>' }),
+            cel('div', { class: 'smc-ico placeholder', innerHTML: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' }),
             cel('div', { class: 'smc-info' }, [
-                cel('div', { class: 'smc-title placeholder', textContent: "Select Department" })
+                cel('div', { class: 'smc-title placeholder', textContent: "Select Department *" })
             ])
         ]));
         cpUpdateDeptVisibility();
@@ -3850,13 +4399,12 @@ function cpRenderSelectedDept() {
     card.className = "selected-model-card";
     card.style.borderStyle = "solid";
 
-    const d = CP_DEPARTMENTS.find(dept => dept.id === cpSelectedDept) || CP_DEPARTMENTS[0];
+    const d = CP_DEPARTMENTS.find(dept => dept.id === cpSelectedDept) || { name: cpSelectedDept, icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v14M21 7v14M6 3h12v4H6z"/></svg>' };
 
     const leftWrap = cel('div', { class: 'smc-left' }, [
         cel('div', { class: 'smc-ico', innerHTML: d.icon }),
         cel('div', { class: 'smc-info' }, [
-            cel('div', { class: 'smc-title', textContent: d.name }),
-            cel('div', { class: 'smc-sub', textContent: d.desc })
+            cel('div', { class: 'smc-title', textContent: d.name })
         ])
     ]);
 
@@ -3866,25 +4414,23 @@ function cpRenderSelectedDept() {
 
     card.appendChild(leftWrap);
     card.appendChild(rightWrap);
-
     cpUpdateDeptVisibility();
 }
 
 function cpOpenDeptModal() {
-    const modal = document.getElementById("cp-dept-modal");
-    if (modal) modal.style.display = "flex";
+    const modal = document.getElementById('cp-dept-modal');
+    if (modal) modal.style.display = 'flex';
     cpRenderDeptModalGrid();
 }
 
 function cpCloseDeptModal() {
-    const modal = document.getElementById("cp-dept-modal");
-    if (modal) modal.style.display = "none";
+    const modal = document.getElementById('cp-dept-modal');
+    if (modal) modal.style.display = 'none';
 }
 
 function cpRenderDeptModalGrid() {
-    const grid = document.getElementById("cp-dept-modal-grid");
+    const grid = document.getElementById('cp-dept-modal-grid');
     if (!grid) return;
-    grid.className = "cp-dept-grid";
     grid.replaceChildren();
 
     CP_DEPARTMENTS.forEach(d => {
@@ -3893,13 +4439,12 @@ function cpRenderDeptModalGrid() {
             class: 'cp-dept-tile model-tile ' + (isSel ? 'selected' : ''),
             onclick: () => cpSelectDept(d.id)
         }, [
-            cel('div', { class: 'cp-dept-icon model-tile-ico', innerHTML: d.icon }),
+            cel('div', { class: 'model-tile-ico', innerHTML: d.icon }),
             cel('div', { class: 'cp-dept-info' }, [
-                cel('div', { class: 'cp-dept-title model-tile-title', textContent: d.name }),
-                cel('div', { class: 'cp-dept-desc model-tile-sub', textContent: d.desc || "" })
+                cel('div', { class: 'model-tile-title', textContent: d.name })
             ]),
-            cel('div', { class: 'cp-dept-chk model-tile-chk', innerHTML: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' })
-        ]);
+            isSel ? cel('div', { class: 'smc-radio-chk', style: 'margin-left:auto;' }, [cel('div', { class: 'smc-radio-dot' })]) : null
+        ].filter(Boolean));
         grid.appendChild(tile);
     });
 }
@@ -3911,53 +4456,59 @@ function cpSelectDept(deptId) {
 }
 
 function cpUpdateDeptVisibility() {
-    const isTech = cpSelectedDept === "Technical";
+    const isTech = cpSelectedDept === 'Technical';
 
-    // Active Subscription field: only visible for Technical department
-    const subGrp = document.getElementById("cp-sub-grp");
-    if (subGrp) {
-        subGrp.style.display = isTech ? "block" : "none";
-    }
-
-    // Category / Query Type field: only visible for Technical department
-    const queryGrp = document.getElementById("cp-query-type-grp");
-    if (queryGrp) {
-        queryGrp.style.display = isTech ? "block" : "none";
-    }
+    const subGrp = document.getElementById('cp-sub-grp');
+    if (subGrp) subGrp.style.display = isTech ? 'block' : 'none';
 
     if (!isTech) {
         cpSelectedSub = null;
+        if (portalData && portalData.support && portalData.support.issue_types && portalData.support.issue_types.length) {
+            cpActiveQueryTypes = portalData.support.issue_types.map(t => ({
+                id: typeof t === 'string' ? t : (t.name || t.id),
+                name: typeof t === 'string' ? t : (t.name || t.id),
+                icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
+            }));
+        } else {
+            cpActiveQueryTypes = null;
+        }
         cpSelectedQuery = "";
+        cpRenderSelectedSub();
+        cpRenderSelectedQuery();
+    } else {
         cpActiveQueryTypes = null;
+        cpSelectedQuery = "";
+        cpRenderSelectedSub();
+        cpRenderSelectedQuery();
     }
 }
 
-/* ─── ACTIVE SUBSCRIPTION MODEL CARD & MODAL (FILTERED TO ACTIVE & DYNAMIC QUERY TYPES) ─── */
+/* ─── ACTIVE SUBSCRIPTION MODEL CARD & MODAL (DYNAMIC SLA TASKS) ─── */
 function cpRenderSelectedSub() {
-    const card = document.getElementById("cp-selected-sub-card");
+    const card = document.getElementById('cp-selected-sub-card');
     if (!card) return;
     card.replaceChildren();
 
     if (!cpSelectedSub) {
-        card.className = "selected-model-card placeholder-state";
+        card.className = 'selected-model-card placeholder-state';
         card.style.borderStyle = "dashed";
         card.appendChild(cel('div', { class: 'smc-left' }, [
-            cel('div', { class: 'smc-ico placeholder', innerHTML: '<i class="ti ti-plus"></i>' }),
+            cel('div', { class: 'smc-ico placeholder', innerHTML: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' }),
             cel('div', { class: 'smc-info' }, [
-                cel('div', { class: 'smc-title placeholder', textContent: "Select Active Subscription / Asset" })
+                cel('div', { class: 'smc-title placeholder', textContent: 'Select Active Subscription / Asset (Optional)' })
             ])
         ]));
         return;
     }
 
-    card.className = "selected-model-card";
+    card.className = 'selected-model-card';
     card.style.borderStyle = "solid";
 
     const leftWrap = cel('div', { class: 'smc-left' }, [
-        cel('div', { class: 'smc-ico sub-icon', innerHTML: '<i class="ti ti-box"></i>' }),
+        cel('div', { class: 'smc-ico sub-icon', innerHTML: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>' }),
         cel('div', { class: 'smc-info' }, [
             cel('div', { class: 'smc-title', textContent: cpSelectedSub.product_name || cpSelectedSub.name }),
-            cel('div', { class: 'smc-sub', textContent: `Ref: ${cpSelectedSub.name} · Qty: ${cpSelectedSub.total_quantity || 1} · End Date: ${formatDate(cpSelectedSub.end_date)}` })
+            cel('div', { class: 'smc-sub', textContent: `Ref: ${cpSelectedSub.name} · Qty: ${cpSelectedSub.total_quantity || 1} · End Date: ${cpSelectedSub.end_date || '-'}` })
         ])
     ]);
 
@@ -3978,26 +4529,25 @@ function cpRenderSelectedSub() {
 }
 
 function cpOpenSubModal() {
-    const modal = document.getElementById("cp-sub-modal");
-    if (modal) modal.style.display = "flex";
+    const modal = document.getElementById('cp-sub-modal');
+    if (modal) modal.style.display = 'flex';
     cpRenderSubModalList();
 }
 
 function cpCloseSubModal() {
-    const modal = document.getElementById("cp-sub-modal");
-    if (modal) modal.style.display = "none";
+    const modal = document.getElementById('cp-sub-modal');
+    if (modal) modal.style.display = 'none';
 }
 
 function cpFilterSubscriptions(query) {
     cpRenderSubModalList(query);
 }
 
-function cpRenderSubModalList(filterQuery = "") {
-    const list = document.getElementById("cp-sub-modal-list");
+function cpRenderSubModalList(filterQuery = '') {
+    const list = document.getElementById('cp-sub-modal-list');
     if (!list) return;
     list.replaceChildren();
 
-    // Filter to ONLY ACTIVE subscriptions (status === 'Active' or end_date in future)
     let items = (portalData && portalData.renewals) ? portalData.renewals : [];
     items = items.filter(s => {
         if (!s) return false;
@@ -4005,7 +4555,7 @@ function cpRenderSubModalList(filterQuery = "") {
         if (status === 'cancelled' || status === 'expired') return false;
         if (s.end_date) {
             const days = Math.ceil((new Date(s.end_date) - new Date()) / (1000 * 60 * 60 * 24));
-            if (days < -30) return false; // hide subscriptions expired over 30 days ago
+            if (days < -30) return false;
         }
         return true;
     });
@@ -4013,15 +4563,15 @@ function cpRenderSubModalList(filterQuery = "") {
     if (filterQuery.trim()) {
         const q = filterQuery.toLowerCase().trim();
         items = items.filter(s =>
-            (s.product_name || "").toLowerCase().includes(q) ||
-            (s.name || "").toLowerCase().includes(q) ||
-            (s.domain_name || "").toLowerCase().includes(q)
+            (s.product_name || '').toLowerCase().includes(q) ||
+            (s.name || '').toLowerCase().includes(q) ||
+            (s.domain_name || '').toLowerCase().includes(q)
         );
     }
 
     if (!items.length) {
         list.appendChild(cel('div', { style: 'padding:20px;text-align:center;color:var(--ink-soft);font-size:13px;' }, [
-            document.createTextNode(filterQuery ? "No matching active subscriptions found." : "No active subscriptions or assets found for this customer.")
+            document.createTextNode(filterQuery ? 'No matching active subscriptions found.' : 'No active subscriptions or assets found for this customer.')
         ]));
         return;
     }
@@ -4052,27 +4602,36 @@ function cpRenderSubModalList(filterQuery = "") {
 
 function cpSelectSub(subItem) {
     cpSelectedSub = subItem;
+    if (subItem) {
+        cpActiveRenewals = [{
+            item: subItem.product_name || subItem.item || subItem.name || '',
+            start_date: subItem.start_date || '',
+            end_date: subItem.end_date || '',
+            quantity: subItem.total_quantity || subItem.quantity || 1,
+            amount: subItem.total_amount || subItem.amount || 0,
+            renewal_id: subItem.name || subItem.renewal_id || ''
+        }];
+    } else {
+        cpActiveRenewals = [];
+    }
     cpRenderSelectedSub();
     cpCloseSubModal();
 
-    // Fetch dynamic SLA Tasks / custom_query_type for the selected subscription from Python backend
+    // Fetch dynamic SLA Tasks / custom query types for selected subscription from Python API
     if (subItem && subItem.name) {
         frappe.call({
             method: "renewal_module.custom_module.page.ticket_list.ticket_list.get_sla_tasks_for_subscription",
-            args: {
-                subscription_name: subItem.name
-            },
+            args: { subscription_name: subItem.name },
             callback: function (r) {
-                const tasks = r.message || [];
+                const tasks = r && r.message ? r.message : [];
                 if (tasks.length) {
                     const taskSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>';
                     cpActiveQueryTypes = tasks.map(t => ({
-                        id: t.task_name,
-                        name: t.task_name,
-                        desc: t.description,
+                        id: t.task_name || t.name,
+                        name: t.task_name || t.name,
+                        desc: t.description || '',
                         icon: taskSvg
                     }));
-                    // Do NOT auto-select the first option; keep empty so user manually selects in modal
                     cpSelectedQuery = "";
                 } else {
                     cpActiveQueryTypes = null;
@@ -4086,6 +4645,7 @@ function cpSelectSub(subItem) {
 
 function cpClearSub() {
     cpSelectedSub = null;
+    cpActiveRenewals = [];
     cpActiveQueryTypes = null;
     cpRenderSelectedSub();
     cpRenderSelectedQuery();
@@ -4093,11 +4653,10 @@ function cpClearSub() {
 
 /* ─── CATEGORY / QUERY TYPE MODEL CARD & MODAL ─── */
 function cpRenderSelectedQuery() {
-    const card = document.getElementById("cp-selected-query-card");
+    const card = document.getElementById('cp-selected-query-card');
     if (!card) return;
     card.replaceChildren();
 
-    // If Technical department and no subscription selected yet, show placeholder state matching ticket_list.js
     if (cpSelectedDept === "Technical" && !cpSelectedSub && (!cpActiveQueryTypes || !cpActiveQueryTypes.length)) {
         card.className = "selected-model-card placeholder-state";
         card.style.borderStyle = "dashed";
@@ -4125,9 +4684,9 @@ function cpRenderSelectedQuery() {
     card.className = "selected-model-card";
     card.style.borderStyle = "solid";
 
-    const queryList = (cpActiveQueryTypes && cpActiveQueryTypes.length > 0) ? cpActiveQueryTypes : "";
+    const queryList = (cpActiveQueryTypes && cpActiveQueryTypes.length > 0) ? cpActiveQueryTypes : [];
     const defaultSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>';
-    const q = queryList.find(item => item.id === cpSelectedQuery || item.name === cpSelectedQuery) || queryList[0] || {
+    const q = (Array.isArray(queryList) ? queryList.find(item => item.id === cpSelectedQuery || item.name === cpSelectedQuery) : null) || {
         id: cpSelectedQuery,
         name: cpSelectedQuery,
         desc: "Category classification for ticket routing",
@@ -4150,22 +4709,21 @@ function cpRenderSelectedQuery() {
 }
 
 function cpOpenQueryModal() {
-    const modal = document.getElementById("cp-query-modal");
-    if (modal) modal.style.display = "flex";
+    const modal = document.getElementById('cp-query-modal');
+    if (modal) modal.style.display = 'flex';
     cpRenderQueryModalGrid();
 }
 
 function cpCloseQueryModal() {
-    const modal = document.getElementById("cp-query-modal");
-    if (modal) modal.style.display = "none";
+    const modal = document.getElementById('cp-query-modal');
+    if (modal) modal.style.display = 'none';
 }
 
 function cpRenderQueryModalGrid() {
-    const grid = document.getElementById("cp-query-modal-grid");
+    const grid = document.getElementById('cp-query-modal-grid');
     if (!grid) return;
     grid.replaceChildren();
 
-    // If Technical department and no sub selected, show empty state matching ticket_list.js
     if (cpSelectedDept === "Technical" && !cpSelectedSub && (!cpActiveQueryTypes || !cpActiveQueryTypes.length)) {
         grid.style.gridTemplateColumns = "1fr";
         grid.appendChild(cel('div', { style: 'padding:32px 16px;text-align:center;color:var(--ink-soft);width:100%;grid-column:1/-1;' }, [
@@ -4186,179 +4744,181 @@ function cpRenderQueryModalGrid() {
     }
 
     grid.style.gridTemplateColumns = "1fr 1fr";
-    const typesToRender = [...cpActiveQueryTypes];
+    const defaultSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>';
 
-    typesToRender.forEach(q => {
+    cpActiveQueryTypes.forEach(q => {
         const isSel = cpSelectedQuery === q.id || cpSelectedQuery === q.name;
-        const defaultSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>';
-        const chkSvg = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
-
         const tile = cel('div', {
             class: 'cp-dept-tile model-tile ' + (isSel ? 'selected' : ''),
             onclick: () => cpSelectQuery(q.id || q.name)
         }, [
             cel('div', { class: 'cp-dept-icon model-tile-ico query-icon', innerHTML: q.icon || defaultSvg }),
             cel('div', { class: 'cp-dept-info' }, [
-                cel('div', { class: 'cp-dept-title model-tile-title', textContent: q.name }),
-                cel('div', { class: 'cp-dept-desc model-tile-sub', textContent: q.desc })
+                cel('div', { class: 'model-tile-title', textContent: q.name })
             ]),
-            cel('div', { class: 'cp-dept-chk model-tile-chk', innerHTML: chkSvg })
-        ]);
+            isSel ? cel('div', { class: 'smc-radio-chk', style: 'margin-left:auto;' }, [cel('div', { class: 'smc-radio-dot' })]) : null
+        ].filter(Boolean));
         grid.appendChild(tile);
     });
 }
 
-function cpSelectQuery(queryName) {
-    cpSelectedQuery = queryName;
+function cpSelectQuery(queryId) {
+    cpSelectedQuery = queryId;
     cpRenderSelectedQuery();
     cpCloseQueryModal();
 }
 
-function cpSelectPriority(priority) {
-    cpSelectedPriority = priority;
+/* ─── PRIORITY SELECTION ─── */
+function cpSelectPriority(prio) {
+    cpSelectedPriority = prio;
+    const prioInput = document.getElementById('nt-priority');
+    if (prioInput) prioInput.value = prio;
+
     const cards = document.querySelectorAll('#cp-prio-grid .cp-prio-card');
     cards.forEach(card => {
-        if (card.dataset.priority === priority) {
+        if (card.getAttribute('data-priority') === prio) {
             card.classList.add('sel');
         } else {
             card.classList.remove('sel');
         }
     });
-
-    const hiddenSelect = document.getElementById('ticket-priority');
-    if (hiddenSelect) hiddenSelect.value = priority;
 }
 
-/* ─── 4-STEP WIZARD STEPPER NAVIGATION ─── */
-function cpGoToStep(step) {
-    cpWizStep = step;
-
-    for (let i = 1; i <= 4; i++) {
-        const ind = document.getElementById(`cp-step-indicator-${i}`);
-        const pnl = document.getElementById(`cp-step-panel-${i}`);
-        if (ind) {
-            if (i === step) {
-                ind.className = 'cp-step-item active';
-            } else if (i < step) {
-                ind.className = 'cp-step-item done';
+/* ─── WIZARD STEPPER NAVIGATION ─── */
+function cpGoToStep(stepNum) {
+    for (let i = 1; i <= 6; i++) {
+        const indicator = document.getElementById(`cp-step-indicator-${i}`);
+        const panel = document.getElementById(`cp-step-panel-${i}`);
+        if (indicator) {
+            if (i < stepNum) {
+                indicator.className = 'cp-step-item completed';
+            } else if (i === stepNum) {
+                indicator.className = 'cp-step-item active';
             } else {
-                ind.className = 'cp-step-item';
+                indicator.className = 'cp-step-item';
             }
         }
-        if (pnl) {
-            pnl.className = 'cp-step-panel ' + (i === step ? 'active' : '');
+        if (panel) {
+            panel.className = i === stepNum ? 'cp-step-panel active' : 'cp-step-panel';
         }
-    }
-
-    if (step === 4) {
-        cpUpdateSummary();
     }
 }
 
-function cpGoNextStep(currentStep) {
-    if (currentStep === 1) {
-        const subj = (document.getElementById('ticket-subject').value || '').trim();
-        if (!subj) {
-            alert("Please enter a subject for your ticket.");
-            document.getElementById('ticket-subject').focus();
-            return;
-        }
+function cpGoNextStep(currStep) {
+    if (currStep === 1) {
+        // Step 1: Customer (auto) & Contact Person
         if (!cpSelectedContacts || cpSelectedContacts.length === 0) {
-            alert("Please select or add at least one Contact Person.");
+            alert('Please select or add at least one Contact Person.');
             return;
         }
-    } else if (currentStep === 2) {
+    } else if (currStep === 2) {
+        // Step 2: Subject & Department
+        const subject = document.getElementById('nt-subject')?.value.trim();
+        if (!subject) {
+            alert('Please enter a Subject for your ticket.');
+            document.getElementById('nt-subject')?.focus();
+            return;
+        }
         if (!cpSelectedDept) {
-            alert("Please select a Department.");
+            alert('Please select a Department.');
             return;
         }
-        if (cpSelectedDept === "Technical" && !cpSelectedQuery) {
-            alert("Please select a Category / Query Type.");
+    } else if (currStep === 3) {
+        // Step 3: Active Subscription (Optional / Selectable)
+        // Can proceed directly
+    } else if (currStep === 4) {
+        // Step 4: Query Type (Priority hidden / defaulted)
+        if (!cpSelectedQuery) {
+            alert('Please select a Query Type.');
             return;
         }
-    } else if (currentStep === 3) {
-        const details = (document.getElementById('ticket-details').value || '').trim();
-        if (!details) {
-            alert("Please enter a detailed description of the issue.");
-            document.getElementById('ticket-details').focus();
+    } else if (currStep === 5) {
+        // Step 5: Description & Attachments
+        const desc = document.getElementById('nt-description')?.value.trim();
+        if (!desc) {
+            alert('Please provide a Detailed Description of your issue.');
+            document.getElementById('nt-description')?.focus();
             return;
         }
+        cpUpdateSummaryBreakdown();
     }
-    cpGoToStep(currentStep + 1);
+    cpGoToStep(currStep + 1);
 }
 
-function cpGoPrevStep(currentStep) {
-    cpGoToStep(currentStep - 1);
+function cpGoPrevStep(currStep) {
+    cpGoToStep(currStep - 1);
 }
 
-function cpUpdateSummary() {
-    const custName = (portalData.customer_info && portalData.customer_info.customer_name) ? portalData.customer_info.customer_name : "-";
-    const salesPerson = (portalData.customer_info && portalData.customer_info.sales_person) ? portalData.customer_info.sales_person : "Not Assigned";
-    const subj = document.getElementById('ticket-subject').value.trim() || "-";
+function cpUpdateSummaryBreakdown() {
+    if (!portalData) return;
+    const info = portalData.customer_info || {};
 
-    let contactStr = "-";
-    if (cpSelectedContacts && cpSelectedContacts.length > 0) {
+    const sumCust = document.getElementById('cp-sum-customer');
+    if (sumCust) sumCust.textContent = info.customer_name || '-';
+
+    const sumSales = document.getElementById('cp-sum-sales-person');
+    if (sumSales) sumSales.textContent = info.sales_person || '';
+
+    const sumSubj = document.getElementById('cp-sum-subject');
+    if (sumSubj) sumSubj.textContent = document.getElementById('nt-subject')?.value || '-';
+
+    let contactStr = '-';
+    if (cpSelectedContacts.length > 0) {
         contactStr = cpSelectedContacts.map(c => {
-            return `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.name || c.email_id;
-        }).join(", ");
+            const firstName = c.first_name || '';
+            const lastName = c.last_name || '';
+            return `${firstName} ${lastName}`.trim() || c.name || c.email_id;
+        }).join(', ');
+    } else {
+        contactStr = info.user_fullname || info.user_email || '-';
     }
+    const sumContact = document.getElementById('cp-sum-contact');
+    if (sumContact) sumContact.textContent = contactStr;
 
-    const activeSubStr = cpSelectedSub ? (cpSelectedSub.product_name || cpSelectedSub.name) : "None";
+    const sumDept = document.getElementById('cp-sum-dept');
+    if (sumDept) sumDept.textContent = cpSelectedDept || '-';
 
-    setText('cp-sum-customer', custName);
-    setText('cp-sum-sales-person', salesPerson);
-    setText('cp-sum-subject', subj);
-    setText('cp-sum-contact', contactStr);
-    setText('cp-sum-dept', cpSelectedDept);
-    setText('cp-sum-sub', activeSubStr);
-    setText('cp-sum-category', cpSelectedQuery);
-    setText('cp-sum-priority', cpSelectedPriority);
-    setText('cp-sum-files', `${cpUploadedFiles.length} file(s) attached`);
+    const sumSub = document.getElementById('cp-sum-sub');
+    if (sumSub) sumSub.textContent = cpSelectedSub ? (cpSelectedSub.product_name || cpSelectedSub.name) : 'None';
+
+    const sumCat = document.getElementById('cp-sum-category');
+    if (sumCat) sumCat.textContent = cpSelectedQuery || '-';
+
+    const sumPrio = document.getElementById('cp-sum-priority');
+    if (sumPrio) sumPrio.textContent = cpSelectedPriority || 'Medium';
+
+    const sumFiles = document.getElementById('cp-sum-files');
+    if (sumFiles) sumFiles.textContent = `${cpUploadedFiles.length} file(s) attached`;
 }
 
+/* ─── FILE UPLOAD HANDLERS ─── */
 function cpHandleFiles(files) {
-    if (!files || !files.length) return;
+    if (!files || files.length === 0) return;
+
     Array.from(files).forEach(file => {
-        frappe.call({
-            method: "customer_portal.api.upload_portal_attachment",
-            args: {},
-            files: { file: file },
-            callback: function (r) {
-                if (r.message && r.message.status === "success") {
-                    cpUploadedFiles.push({
-                        file_url: r.message.file_url,
-                        name: r.message.name,
-                        file_name: r.message.file_name || file.name
-                    });
-                    cpRenderAttachmentsList();
-                } else {
-                    const reader = new FileReader();
-                    reader.onload = function (e) {
-                        const base64Data = e.target.result;
-                        frappe.call({
-                            method: "customer_portal.api.upload_portal_attachment",
-                            args: {
-                                filename: file.name,
-                                filedata: base64Data
-                            },
-                            callback: function (res) {
-                                if (res.message && res.message.status === "success") {
-                                    cpUploadedFiles.push({
-                                        file_url: res.message.file_url,
-                                        name: res.message.name,
-                                        file_name: res.message.file_name || file.name
-                                    });
-                                    cpRenderAttachmentsList();
-                                } else {
-                                    alert("Failed to upload " + file.name);
-                                }
-                            }
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const base64Data = e.target.result;
+            frappe.call({
+                method: 'customer_portal.api.upload_portal_attachment',
+                args: {
+                    filename: file.name,
+                    filedata: base64Data
+                },
+                callback: function (r) {
+                    if (r.message && r.message.status === 'success') {
+                        cpUploadedFiles.push({
+                            file_name: file.name,
+                            file_url: r.message.file_url
                         });
-                    };
-                    reader.readAsDataURL(file);
+                        cpRenderAttachmentsList();
+                    } else {
+                        alert('Failed to upload ' + file.name);
+                    }
                 }
-            }
-        });
+            });
+        };
+        reader.readAsDataURL(file);
     });
 }
 
@@ -4374,13 +4934,12 @@ function cpRenderAttachmentsList() {
 
     cpUploadedFiles.forEach((file, idx) => {
         const item = cel('div', { class: 'cp-att-item' }, [
-            cel('div', { class: 'cp-att-name' }, [
-                cel('i', { class: 'ti ti-paperclip', style: 'margin-right:6px;color:var(--indigo)' }),
-                document.createTextNode(file.file_name)
-            ]),
+            cel('i', { class: 'ti ti-paperclip', style: 'color:var(--blue);' }),
+            document.createTextNode(' ' + file.file_name),
             cel('button', {
                 type: 'button',
                 class: 'cp-att-remove',
+                style: 'margin-left:8px;',
                 onclick: () => cpRemoveFile(idx)
             }, [
                 cel('i', { class: 'ti ti-x' })
@@ -4390,12 +4949,16 @@ function cpRenderAttachmentsList() {
     });
 }
 
+/* ─── SUBMIT TICKET API CALL ─── */
 function submitTicket() {
-    const btn = document.getElementById('cp-submit-btn');
+    const btn = document.getElementById('cp-submit-btn') || document.getElementById('nt-submit-btn');
     if (btn && btn.disabled) return;
 
-    const subject = document.getElementById('ticket-subject').value.trim();
-    const details = document.getElementById('ticket-details').value.trim();
+    const subjectEl = document.getElementById('ticket-subject') || document.getElementById('nt-subject');
+    const detailsEl = document.getElementById('ticket-details') || document.getElementById('nt-description');
+
+    const subject = subjectEl ? subjectEl.value.trim() : '';
+    const details = detailsEl ? detailsEl.value.trim() : '';
 
     let contactPersonStr = "";
     if (cpSelectedContacts && cpSelectedContacts.length > 0) {
@@ -4408,10 +4971,10 @@ function submitTicket() {
         email_id: c.email_id || "",
         mobile_no: c.phone || c.mobile_no || "",
         designation: c.designation || "",
-        is_primary: c.is_primary ? 1 : 0
+        is_primary: (c.tpoc || c.custom_tpoc || c.is_primary) ? 1 : 0
     }));
 
-    const activeSubStr = cpSelectedSub ? (cpSelectedSub.product_name || cpSelectedSub.name) : "";
+    const activeSubStr = cpSelectedSub ? (cpSelectedSub.name || cpSelectedSub.product_name) : "";
 
     if (!subject || !details) {
         alert("Please fill in both the Subject and Detailed Description of the issue.");
@@ -4430,12 +4993,15 @@ function submitTicket() {
         args: {
             subject: subject,
             description: details,
+            status: "Created",
             priority: cpSelectedPriority,
             category: cpSelectedQuery,
             department: cpSelectedDept,
             active_subscription: activeSubStr,
+            active_renewals: JSON.stringify(cpActiveRenewals),
             contact_person: contactPersonStr,
             contacts: JSON.stringify(contactsPayload),
+            raised_via_channel: "Customer Portal",
             attachments: attachmentUrls
         },
         callback: function (r) {
@@ -4453,28 +5019,28 @@ function submitTicket() {
                     }
                 }
 
-                // Clear wizard fields
-                document.getElementById('ticket-subject').value = '';
-                document.getElementById('ticket-details').value = '';
-                cpUploadedFiles = [];
-                cpRenderAttachmentsList();
-                cpGoToStep(1);
+                if (typeof closeNewTicketModal === 'function') closeNewTicketModal();
+                if (typeof cpResetTicketWizard === 'function') cpResetTicketWizard();
 
-                // Fetch latest portal data and open ticket detail view support/<newTicketId> directly
                 fetchPortalData(function () {
-                    let newTicket = (portalData && portalData.tickets) ? portalData.tickets.find(t => t.name === newTicketId) : null;
-                    if (!newTicket) {
-                        newTicket = {
-                            name: newTicketId,
-                            subject: subject,
-                            description: details,
-                            status: "Open",
-                            priority: cpSelectedPriority,
-                            department: cpSelectedDept,
-                            creation: new Date().toISOString()
-                        };
+                    if (typeof openTicketDetail === 'function') {
+                        const ticketsList = (portalData && portalData.support && portalData.support.tickets) ? portalData.support.tickets : (portalData && portalData.tickets ? portalData.tickets : []);
+                        let newTicket = ticketsList.find(t => t.name === newTicketId);
+                        if (!newTicket) {
+                            newTicket = {
+                                name: newTicketId,
+                                subject: subject,
+                                description: details,
+                                status: "Created",
+                                priority: cpSelectedPriority,
+                                department: cpSelectedDept,
+                                creation: new Date().toISOString()
+                            };
+                        }
+                        openTicketDetail(newTicket);
+                    } else if (typeof go === 'function') {
+                        go('tickets');
                     }
-                    openTicketDetail(newTicket);
                 });
             } else {
                 alert("An error occurred while submitting the ticket.");
@@ -4489,107 +5055,117 @@ function submitTicket() {
     });
 }
 
-function openEditCompanyModal() {
-    toggleInlineCompanyGstin(true);
+function submitNewTicket() {
+    submitTicket();
 }
 
-function closeEditCompanyModal() {
-    toggleInlineCompanyGstin(false);
-}
+// Account & Contacts Render
+function renderAccount() {
+    if (!portalData) return;
+    const info = portalData.customer_info || {};
+    const name = info.customer_name || 'Valued Customer';
+    const initial = (info.customer_name || info.user_fullname || name).charAt(0).toUpperCase() || 'C';
+    const imgUrl = info.image || info.customer_logo || info.user_image || '';
 
-function saveCompanyDetails() {
-    const inlineInput = document.getElementById('settings-gstin-inline-input');
-    const modalInput = document.getElementById('modal-company-gstin');
-    const settingsInput = document.getElementById('settings-gstin');
-
-    let gstinInput = null;
-    if (inlineInput && inlineInput.offsetParent !== null) {
-        gstinInput = inlineInput;
-    } else if (modalInput && modalInput.offsetParent !== null) {
-        gstinInput = modalInput;
-    } else {
-        gstinInput = modalInput || inlineInput || settingsInput;
-    }
-
-    const gstin = gstinInput ? gstinInput.value.trim().toUpperCase() : '';
-
-    if (gstinInput) gstinInput.classList.remove('input-field-error');
-
-    if (gstin) {
-        const gstinRegex = /^[0-9]{2}[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}[0-9A-Za-z]{1}[Zz0-9A-Za-z]{1}[0-9A-Za-z]{1}$/;
-        if (!gstinRegex.test(gstin) && gstin.length !== 15) {
-            if (gstinInput) {
-                gstinInput.classList.add('input-field-error');
-                gstinInput.focus();
-            }
-            showPortalModalPopup("Invalid GSTIN number! GSTIN must be 15 characters (e.g. 37AABCA9106B1Z5).", "Validation Error", "error");
-            return;
+    const iconCircle = document.getElementById('acct-company-icon-circle');
+    if (iconCircle) {
+        iconCircle.replaceChildren();
+        if (imgUrl && imgUrl.trim()) {
+            const imgEl = cel('img', {
+                src: imgUrl.trim(),
+                alt: name,
+                class: 'pf-company-avatar-img',
+                onerror: function () {
+                    this.replaceWith(cel('span', { class: 'pf-company-initials', id: 'acct-avatar-initial', textContent: initial }));
+                }
+            });
+            iconCircle.appendChild(imgEl);
+        } else {
+            iconCircle.appendChild(cel('span', { class: 'pf-company-initials', id: 'acct-avatar-initial', textContent: initial }));
         }
     }
 
-    const saveBtn = document.querySelector('#pf-company-modal-overlay .pf-btn.primary') ||
-        document.querySelector('#settings-gstin-edit-wrapper .pf-btn.primary') ||
-        document.querySelector('#page-settings .pf-btn.primary');
-    let origHtml = '';
-    if (saveBtn) {
-        saveBtn.disabled = true;
-        origHtml = saveBtn.innerHTML;
-        saveBtn.innerHTML = '<i class="ti ti-loader spin"></i> Saving...';
-    }
+    const legalNameEl = document.getElementById('acct-legal-name-val');
+    if (legalNameEl) legalNameEl.textContent = info.customer_name || name;
 
-    frappe.call({
-        method: "customer_portal.api.save_account_settings",
-        args: {
-            gstin: gstin
+    const gstinEl = document.getElementById('acct-gstin');
+    if (gstinEl) gstinEl.textContent = info.gstin || '-';
+
+    renderSupportTeamCards();
+    renderAccountAddresses();
+    renderAccountContacts();
+}
+
+function renderSupportTeamCards() {
+    const container = document.getElementById('acct-team-cards-container');
+    if (!container || !portalData) return;
+    container.replaceChildren();
+
+    const info = portalData.customer_info || {};
+
+    const teamMembers = [
+        {
+            role: 'ACCOUNT MANAGER',
+            name: info.sales_person || '',
+            image: info.sales_person_image || '',
+            email: info.sales_person_email || '',
+            bgColor: '#2563eb'
         },
-        callback: function (r) {
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = origHtml || '<i class="ti ti-check"></i> Save Details';
-            }
-            if (r.message && r.message.status === "success") {
-                closeEditCompanyModal();
-                toggleInlineCompanyGstin(false);
-                showPortalModalPopup("Company details successfully updated!", "Success", "success");
-                fetchPortalData();
-            } else {
-                const errMsg = extractFrappeErrorMessage(r);
-                showPortalModalPopup(errMsg || "An error occurred while saving company details.", "Error", "error");
-            }
+        {
+            role: 'TECHNICAL LEAD',
+            name: info.technical_lead || '',
+            image: info.technical_lead_image || '',
+            email: info.technical_lead_email || '',
+            bgColor: '#9333ea'
         },
-        error: function (r) {
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = origHtml || '<i class="ti ti-check"></i> Save Details';
-            }
-            const errMsg = extractFrappeErrorMessage(r);
-            showPortalModalPopup(errMsg || "Failed to save company details.", "Error", "error");
+        {
+            role: 'BILLING SUPPORT',
+            name: info.billing_contact || '',
+            image: info.billing_contact_image || '',
+            email: info.billing_contact_email || '',
+            bgColor: '#059669'
         }
+    ];
+
+    teamMembers.forEach(m => {
+        const rawName = (m.name && m.name.trim()) ? m.name.trim() : 'Unassigned';
+        const initial = rawName !== 'Unassigned' ? rawName.charAt(0).toUpperCase() : '?';
+
+        let avatarEl;
+        if (m.image && m.image.trim() && rawName !== 'Unassigned') {
+            avatarEl = cel('div', { class: 'pf-support-avatar', style: 'overflow:hidden;padding:0;background:transparent;' });
+            const imgEl = cel('img', {
+                src: m.image.trim(),
+                alt: rawName,
+                class: 'pf-company-avatar-img',
+                onerror: function () {
+                    this.replaceWith(document.createTextNode(initial));
+                    avatarEl.style.background = m.bgColor;
+                    avatarEl.style.padding = '';
+                }
+            });
+            avatarEl.appendChild(imgEl);
+        } else {
+            const bg = rawName === 'Unassigned' ? '#94a3b8' : m.bgColor;
+            avatarEl = cel('div', { class: 'pf-support-avatar', style: `background:${bg};` }, [
+                document.createTextNode(initial)
+            ]);
+        }
+
+        const card = cel('div', { class: 'pf-support-team-card' }, [
+            avatarEl,
+            cel('div', { class: 'pf-support-team-info' }, [
+                cel('div', { class: 'pf-support-role-label', textContent: m.role }),
+                cel('div', { class: 'pf-support-person-name', textContent: rawName }),
+                (m.email && m.email.trim() && rawName !== 'Unassigned') ? cel('div', { class: 'pf-support-person-email' }, [
+                    cel('i', { class: 'ti ti-mail', style: 'font-size:12px;margin-right:4px;color:var(--blue);' }),
+                    cel('span', { textContent: m.email.trim() })
+                ]) : null
+            ].filter(Boolean))
+        ]);
+
+        container.appendChild(card);
     });
-}
-
-function toggleInlineCompanyGstin(show) {
-    const wrapper = document.getElementById('settings-gstin-edit-wrapper');
-    const display = document.getElementById('settings-gstin-val-wrapper');
-    const input = document.getElementById('settings-gstin-inline-input');
-    if (!wrapper || !display) return;
-    if (show) {
-        if (input) input.value = (portalData.customer_info && portalData.customer_info.gstin) || '';
-        display.style.display = 'none';
-        wrapper.style.display = 'flex';
-        if (input) input.focus();
-    } else {
-        display.style.display = 'block';
-        wrapper.style.display = 'none';
-    }
-}
-
-function saveInlineCompanyGstin() {
-    saveCompanyDetails();
-}
-
-function saveSettings() {
-    saveCompanyDetails();
 }
 
 function triggerCompanyLogoUpload() {
@@ -4605,121 +5181,186 @@ function uploadCompanyLogo(input) {
     formData.append("file", file);
     formData.append("cmd", "customer_portal.api.upload_company_logo");
 
-    const iconCircle = document.getElementById('pf-company-icon-circle');
-    let origContent = '';
+    const iconCircle = document.getElementById('acct-company-icon-circle');
     if (iconCircle) {
-        origContent = iconCircle.innerHTML;
-        iconCircle.innerHTML = '<i class="ti ti-loader spin" style="font-size:24px; color:#7c3aed;"></i>';
+        iconCircle.innerHTML = '<i class="ti ti-loader spin" style="font-size:20px;color:#16a34a;"></i>';
     }
 
     fetch('/api/method/customer_portal.api.upload_company_logo', {
         method: 'POST',
         headers: {
-            'X-Frappe-CSRF-Token': (window.frappe && window.frappe.csrf_token) || frappe.csrf_token || ''
+            'X-Frappe-CSRF-Token': window.csrf_token || (window.frappe && window.frappe.csrf_token) || ''
         },
         body: formData
     })
-        .then(r => r.json())
+        .then(res => res.json())
         .then(data => {
-            if (data.message && data.message.status === 'success') {
-                showPortalModalPopup("Company logo successfully updated!", "Success", "success");
-                fetchPortalData();
+            if (data.message && data.message.file_url) {
+                const newUrl = data.message.file_url;
+                if (portalData && portalData.customer_info) {
+                    portalData.customer_info.image = newUrl;
+                }
+                renderAccount();
             } else {
-                if (iconCircle) iconCircle.innerHTML = origContent;
-                const errMsg = extractFrappeErrorMessage(data);
-                showPortalModalPopup(errMsg || "Failed to upload company logo.", "Error", "error");
+                alert(data.exception || "Failed to upload logo.");
+                renderAccount();
             }
         })
-        .catch(err => {
-            if (iconCircle) iconCircle.innerHTML = origContent;
-            showPortalModalPopup("Error uploading company logo file.", "Error", "error");
+        .catch(() => {
+            alert("Error uploading company logo file.");
+            renderAccount();
         });
 }
 
-/* ─── ADDRESS MANAGEMENT & MODAL ─── */
+function renderAccountContacts() {
+    const container = document.getElementById('acct-contacts-container');
+    if (!container || !portalData) return;
+    container.replaceChildren();
 
-function populateAddressMetaOptions() {
-    const typeSelect = document.getElementById('pam-type');
-    if (typeSelect && portalData.address_type_options && portalData.address_type_options.length > 0) {
-        const curVal = typeSelect.value || 'Billing';
-        typeSelect.replaceChildren();
-        portalData.address_type_options.forEach(opt => {
-            typeSelect.appendChild(cel('option', { value: opt, textContent: opt }));
-        });
-        if (Array.from(typeSelect.options).some(o => o.value === curVal)) {
-            typeSelect.value = curVal;
-        }
+    const contacts = portalData.contacts || [];
+    if (contacts.length === 0) {
+        container.appendChild(cel('div', { style: 'color:var(--ink-soft);font-size:13px;padding:12px 0;' }, ['No team contacts registered for this account.']));
+        return;
     }
 
-    const gstSelect = document.getElementById('pam-gst-category');
-    if (gstSelect && portalData.gst_category_options && portalData.gst_category_options.length > 0) {
-        const curVal = gstSelect.value || '';
-        gstSelect.replaceChildren(cel('option', { value: '', textContent: '-- Select GST Category --' }));
-        portalData.gst_category_options.forEach(opt => {
-            gstSelect.appendChild(cel('option', { value: opt, textContent: opt }));
-        });
-        if (Array.from(gstSelect.options).some(o => o.value === curVal)) {
-            gstSelect.value = curVal;
+    const gridDiv = cel('div', { class: 'pf-contact-cards-grid' });
+    const avatarColors = ['#2563eb', '#9333ea', '#059669', '#ea580c', '#0891b2', '#d97706'];
+
+    contacts.forEach((c, idx) => {
+        const fullName = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.name || 'Contact';
+        const initial = fullName.charAt(0).toUpperCase() || 'C';
+        const isTpoc = Boolean(c.tpoc || c.custom_tpoc);
+        const isPrimary = Boolean(c.is_primary_contact || c.is_primary);
+        const designationText = c.designation || 'Team Contact';
+        const emailText = c.email_id || '-';
+        const phoneText = c.mobile_no || c.phone || '-';
+
+        const contactImg = c.image || c.user_image || c.custom_image || c.contact_image || c.avatar || c.photo || '';
+        const avatarColor = avatarColors[idx % avatarColors.length];
+
+        let avatarEl;
+        if (contactImg && contactImg.trim()) {
+            avatarEl = cel('div', { class: 'pf-contact-avatar', style: 'overflow:hidden;padding:0;background:transparent;' });
+            const imgEl = cel('img', {
+                src: contactImg.trim(),
+                alt: fullName,
+                class: 'pf-company-avatar-img',
+                onerror: function () {
+                    this.replaceWith(document.createTextNode(initial));
+                    avatarEl.style.background = avatarColor;
+                    avatarEl.style.padding = '';
+                }
+            });
+            avatarEl.appendChild(imgEl);
+        } else {
+            avatarEl = cel('div', { class: 'pf-contact-avatar', style: `background:${avatarColor};` }, [document.createTextNode(initial)]);
         }
-    }
+
+        const card = cel('div', { class: 'pf-contact-card' }, [
+            // Top Avatar & Title Row
+            cel('div', { class: 'pf-contact-card-top' }, [
+                cel('div', { class: 'pf-contact-avatar-box' }, [
+                    avatarEl,
+                    cel('div', { class: 'pf-contact-info-head' }, [
+                        cel('div', { class: 'pf-contact-name', textContent: fullName }),
+                        cel('div', { class: 'pf-contact-designation', textContent: designationText })
+                    ])
+                ]),
+                // Badges
+                cel('div', { class: 'pf-contact-badges' }, [
+                    isPrimary ? cel('span', { class: 'pill green', style: 'font-size:10.5px;padding:2px 8px;font-weight:700;', textContent: 'Primary' }) : null,
+                    isTpoc ? cel('span', { class: 'tpoc-badge-green', style: 'font-size:10.5px;padding:3px 8px;font-weight:700;', textContent: '✓ TPOC' }) : null
+                ].filter(Boolean))
+            ]),
+
+            // Details List (Email & Phone)
+            cel('div', { class: 'pf-contact-details-list' }, [
+                cel('div', { class: 'pf-contact-detail-item' }, [
+                    cel('i', { class: 'ti ti-mail' }),
+                    cel('span', { textContent: emailText })
+                ]),
+                cel('div', { class: 'pf-contact-detail-item' }, [
+                    cel('i', { class: 'ti ti-phone' }),
+                    cel('span', { textContent: phoneText })
+                ])
+            ])
+        ]);
+
+        gridDiv.appendChild(card);
+    });
+
+    container.appendChild(gridDiv);
 }
 
-function renderAddressesList() {
-    const container = document.getElementById('settings-addresses-list');
-    if (!container) return;
+function renderAccountAddresses() {
+    const container = document.getElementById('acct-addresses-container');
+    if (!container || !portalData) return;
     container.replaceChildren();
 
     const addresses = portalData.addresses || [];
-
-    // Construct fallback billing address if backend has billing_address in customer_info
-    if (addresses.length === 0 && portalData.customer_info && portalData.customer_info.billing_address) {
-        const fallbackAddr = {
-            name: '',
-            address_title: portalData.customer_info.customer_name || 'Primary Address',
-            address_type: 'Billing',
-            address_line1: portalData.customer_info.billing_address,
-            gstin: portalData.customer_info.gstin || '',
-            is_primary_address: 1
-        };
-        addresses.push(fallbackAddr);
-    }
-
-    if (addresses.length === 0) {
-        container.appendChild(renderEmptyState("No addresses found. Click '+ Add new address' to create one."));
-        return;
-    }
+    const info = portalData.customer_info || {};
 
     let billingList = addresses.filter(a => a.address_type === "Billing" || a.is_primary_address);
     let shippingList = addresses.filter(a => a.address_type === "Shipping" || a.is_shipping_address);
     let otherList = addresses.filter(a => a.address_type !== "Billing" && !a.is_primary_address && a.address_type !== "Shipping" && !a.is_shipping_address);
 
-    if (billingList.length === 0 && addresses.length > 0) {
-        billingList = [addresses[0]];
+    if (billingList.length === 0) {
+        if (addresses.length > 0) {
+            billingList = [addresses[0]];
+        } else if (info.billing_address) {
+            billingList = [{
+                address_title: info.customer_name || 'Primary Billing Location',
+                address_type: 'Billing',
+                address_line1: info.billing_address,
+                gstin: info.gstin || '',
+                is_primary_address: 1
+            }];
+        }
     }
 
-    let isShippingFallback = false;
-    if (shippingList.length === 0 && billingList.length > 0) {
-        shippingList = [billingList[0]];
-        isShippingFallback = true;
+    let isShippingSameAsBilling = false;
+    if (shippingList.length === 0) {
+        if (info.shipping_address && info.shipping_address !== info.billing_address) {
+            shippingList = [{
+                address_title: info.customer_name || 'Shipping Location',
+                address_type: 'Shipping',
+                address_line1: info.shipping_address,
+                is_shipping_address: 1
+            }];
+        } else if (billingList.length > 0) {
+            shippingList = [billingList[0]];
+            isShippingSameAsBilling = true;
+        }
     }
 
-    function createAddressCardV2(a, type, isFallback = false, idx = 0) {
+    function createAddressCard(addr, type, isSameAsBilling = false) {
         const isBilling = type === 'Billing';
-        const isShipping = type === 'Shipping';
         const cardClass = isBilling ? 'billing-card' : 'shipping-card';
         const iconClass = isBilling ? 'billing' : 'shipping';
         const iconName = isBilling ? 'ti ti-file-text' : 'ti ti-truck';
-        const typeLabel = isBilling ? 'Billing address' : 'Shipping address';
-        const companyTitle = (portalData.customer_info && portalData.customer_info.customer_name) || a.address_title || (type + ' Address');
+        const typeLabel = isBilling ? 'Billing Address' : 'Shipping Address';
+        const titleText = addr.address_title || info.customer_name || `${type} Location`;
 
-        const line1 = a.address_line1 || '';
-        const line2 = a.address_line2 || '';
-        const cityState = [a.city, a.state, a.pincode].filter(Boolean).join(', ');
-        const country = a.country || '';
-        const addressLines = [line1, line2, cityState, country].filter(Boolean);
+        const rawLines = [
+            addr.address_line1,
+            addr.address_line2,
+            [addr.city, addr.state, addr.pincode].filter(Boolean).join(', '),
+            addr.country
+        ].filter(Boolean);
 
-        const card = cel('div', { class: `pf-card-address-v2 ${cardClass}` }, [
-            // Top Row
+        let linesToRender = rawLines;
+        if (rawLines.length === 0 && addr.address_line1) {
+            linesToRender = [addr.address_line1];
+        }
+
+        const topBadge = isSameAsBilling ?
+            cel('span', { class: 'pf-badge-primary shipping', textContent: 'SAME AS BILLING' }) :
+            (isBilling ? cel('span', { class: 'pf-badge-primary billing', textContent: 'PRIMARY' }) :
+                cel('span', { class: 'pf-badge-primary shipping', textContent: 'SHIPPING' }));
+
+        const gstinVal = addr.gstin || (isBilling ? info.gstin : '');
+
+        return cel('div', { class: `pf-card-address-v2 ${cardClass}` }, [
             cel('div', { class: 'pf-card-address-top' }, [
                 cel('div', { class: 'pf-card-address-type-badge' }, [
                     cel('div', { class: `pf-type-icon-box ${iconClass}` }, [
@@ -4728,707 +5369,206 @@ function renderAddressesList() {
                     cel('span', { class: `pf-type-label ${iconClass}`, textContent: typeLabel })
                 ]),
                 cel('div', { class: 'pf-card-address-top-right' }, [
-                    (a.is_primary_address || a.is_shipping_address || !isFallback) ? cel('span', { class: `pf-badge-primary ${iconClass}`, textContent: 'PRIMARY' }) : null,
-                    isFallback ? cel('span', { class: 'pf-badge-primary shipping', textContent: 'SAME AS BILLING' }) : null,
-                    cel('button', {
-                        class: 'pf-card-dots-btn',
-                        title: 'Edit Address',
-                        onclick: (e) => { e.stopPropagation(); openAddressEditModal(a.name || null, isFallback ? type : null); }
-                    }, [
-                        cel('i', { class: 'ti ti-pencil' })
-                    ])
+                    topBadge
                 ])
             ]),
 
-            // Company Name
-            companyTitle ? cel('div', { class: 'pf-card-address-company', textContent: companyTitle }) : null,
+            cel('div', { class: 'pf-card-address-company', textContent: titleText }),
 
-            // Location Pin & Address Lines
             cel('div', { class: 'pf-card-address-location' }, [
                 cel('i', { class: 'ti ti-map-pin' }),
-                cel('div', { class: 'pf-card-address-lines' }, addressLines.map(l => cel('div', { textContent: l })))
+                cel('div', { class: 'pf-card-address-lines' },
+                    linesToRender.length > 0 ?
+                        linesToRender.map(l => cel('div', { textContent: l })) :
+                        [cel('div', { style: 'color:var(--ink-soft);', textContent: 'No address details provided.' })]
+                )
             ]),
 
-            // GSTIN Pill Tag
-            a.gstin ? cel('div', { class: `pf-gstin-pill-tag ${iconClass}` }, [
+            gstinVal ? cel('div', { class: `pf-gstin-pill-tag ${iconClass}` }, [
                 cel('i', { class: 'ti ti-receipt-tax' }),
-                document.createTextNode(`GSTIN: ${a.gstin}`)
+                document.createTextNode(`GSTIN: ${gstinVal}`)
             ]) : null
         ]);
-
-        return card;
     }
 
-    // 2-Column Grid Container matching Image 2
     const gridDiv = cel('div', { class: 'pf-address-grid-v2' });
 
-    // --- COLUMN 1: BILLING ADDRESS ---
-    const billingCol = cel('div', { class: 'pf-address-column' });
-    billingList.forEach((addr, idx) => {
-        billingCol.appendChild(createAddressCardV2(addr, 'Billing', false, idx));
+    billingList.forEach(addr => {
+        gridDiv.appendChild(createAddressCard(addr, 'Billing', false));
     });
-    gridDiv.appendChild(billingCol);
 
-    // --- COLUMN 2: SHIPPING ADDRESS ---
-    const shippingCol = cel('div', { class: 'pf-address-column' });
-    shippingList.forEach((addr, idx) => {
-        shippingCol.appendChild(createAddressCardV2(addr, 'Shipping', isShippingFallback, idx));
+    shippingList.forEach(addr => {
+        gridDiv.appendChild(createAddressCard(addr, 'Shipping', isShippingSameAsBilling));
     });
-    gridDiv.appendChild(shippingCol);
 
     container.appendChild(gridDiv);
 
-    // --- OTHER ADDRESSES (IF ANY) ---
     if (otherList.length > 0) {
-        const otherGroup = cel('div', { class: 'pf-address-column full-width mt-4' });
-        otherList.forEach((addr, idx) => {
-            otherGroup.appendChild(createAddressCardV2(addr, 'Other', false, idx));
+        const otherGrid = cel('div', { class: 'pf-address-grid-v2', style: 'margin-top:16px;' });
+        otherList.forEach(addr => {
+            otherGrid.appendChild(createAddressCard(addr, 'Other', false));
         });
-        container.appendChild(otherGroup);
+        container.appendChild(otherGrid);
     }
 }
 
-/* ─── ADDRESS WIZARD MODAL ─── */
+// Pagination and Filtering Handlers
+function getPageSize(pageName) {
+    const possibleIds = [
+        `${pageName}-page-size`,
+        `${pageName.replace(/s$/, '')}-page-size`,
+        pageName === 'tickets' ? 'support-page-size' : '',
+        pageName === 'support' ? 'tickets-page-size' : '',
+        pageName === 'renewals' ? 'renewal-page-size' : '',
+        pageName === 'invoices' ? 'invoice-page-size' : ''
+    ].filter(Boolean);
 
-let currentAddressWizardStep = 1;
-
-function goToAddressWizardStep(step) {
-    if (step < 1 || step > 4) return;
-
-    // Validate inputs when advancing to future steps
-    if (step > currentAddressWizardStep) {
-        if (currentAddressWizardStep === 1) {
-            const title = document.getElementById('pam-title').value.trim();
-            if (!title) {
-                showPortalModalPopup("Please enter an Address Title to proceed.", "Validation Notice", "error");
-                return;
-            }
-        } else if (currentAddressWizardStep === 2) {
-            const line1 = document.getElementById('pam-line1').value.trim();
-            const city = document.getElementById('pam-city').value.trim();
-            if (!line1 || !city) {
-                showPortalModalPopup("Please fill in required fields: Address Line 1 and City.", "Validation Notice", "error");
-                return;
-            }
+    for (const id of possibleIds) {
+        const el = document.getElementById(id);
+        if (el && el.value) {
+            return parseInt(el.value, 10) || 10;
         }
     }
+    return 10;
+}
 
-    currentAddressWizardStep = step;
+function updateQueuePaginationUI(pageName, totalCount) {
+    const state = listState[pageName];
+    if (!state) return;
 
-    // Switch step panels
-    for (let i = 1; i <= 4; i++) {
-        const panel = document.getElementById('pam-panel-' + i);
-        if (panel) panel.style.display = (i === step) ? 'block' : 'none';
+    const limit = state.limit || 10;
+    const countInfo = document.getElementById(`${pageName}-count-info`);
+    if (countInfo) {
+        countInfo.textContent = `${Math.min(limit, totalCount)} of ${totalCount}`;
+    }
 
-        const circle = document.getElementById('pam-step-circle-' + i);
-        if (circle) {
-            if (i < step) {
-                circle.style.background = '#10b981';
-                circle.style.borderColor = '#10b981';
-                circle.style.color = '#ffffff';
-                circle.innerHTML = '<i class="ti ti-check" style="font-size:12px;"></i>';
-            } else if (i === step) {
-                circle.style.background = 'var(--indigo, #4f46e5)';
-                circle.style.borderColor = 'var(--indigo, #4f46e5)';
-                circle.style.color = '#ffffff';
-                circle.textContent = i;
+    const loadMoreBtn = document.getElementById(`${pageName}-load-more`);
+    if (loadMoreBtn) {
+        loadMoreBtn.disabled = limit >= totalCount;
+    }
+
+    const btnsContainer = document.getElementById(`${pageName}-page-size-btns`);
+    if (btnsContainer) {
+        btnsContainer.querySelectorAll('.btn-paging').forEach(btn => {
+            const btnVal = parseInt(btn.getAttribute('data-value'), 10);
+            if (btnVal === limit) {
+                btn.classList.add('active-pagination');
             } else {
-                circle.style.background = '#f1f5f9';
-                circle.style.borderColor = '#cbd5e1';
-                circle.style.color = '#64748b';
-                circle.textContent = i;
+                btn.classList.remove('active-pagination');
             }
-        }
-    }
-
-    // Toggle navigation buttons
-    const backBtn = document.getElementById('pam-back-btn');
-    const nextBtn = document.getElementById('pam-next-btn');
-    const saveBtn = document.getElementById('pam-save-btn');
-
-    if (backBtn) backBtn.style.display = (step > 1) ? 'inline-flex' : 'none';
-    if (nextBtn) nextBtn.style.display = (step < 4) ? 'inline-flex' : 'none';
-    if (saveBtn) saveBtn.style.display = (step === 4) ? 'inline-flex' : 'none';
-
-    if (step === 4) {
-        renderAddressReviewSummary();
-    }
-}
-
-function nextAddressWizardStep() {
-    goToAddressWizardStep(currentAddressWizardStep + 1);
-}
-
-function prevAddressWizardStep() {
-    goToAddressWizardStep(currentAddressWizardStep - 1);
-}
-
-function renderAddressReviewSummary() {
-    const summaryContainer = document.getElementById('pam-review-summary');
-    if (!summaryContainer) return;
-
-    const title = document.getElementById('pam-title').value.trim() || '--';
-    const type = document.getElementById('pam-type').value || 'Billing';
-    const line1 = document.getElementById('pam-line1').value.trim() || '--';
-    const line2 = document.getElementById('pam-line2').value.trim();
-    const city = document.getElementById('pam-city').value.trim() || '--';
-    const state = document.getElementById('pam-state').value.trim();
-    const country = document.getElementById('pam-country').value.trim() || 'India';
-    const pincode = document.getElementById('pam-pincode').value.trim();
-    const gstin = document.getElementById('pam-gstin').value.trim();
-    const gstCategory = document.getElementById('pam-gst-category').value;
-    const isBilling = document.getElementById('pam-is-primary-billing').checked;
-    const isShipping = document.getElementById('pam-is-primary-shipping').checked;
-
-    const fullLocation = [line1, line2, [city, state, pincode].filter(Boolean).join(', '), country].filter(Boolean).join(', ');
-
-    summaryContainer.replaceChildren(
-        cel('div', { style: 'display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:8px; margin-bottom:10px;' }, [
-            cel('div', {}, [
-                cel('div', { style: 'font-size:15px; font-weight:700; color:var(--ink);', textContent: title }),
-                cel('div', { style: 'font-size:11px; font-weight:600; color:var(--indigo); text-transform:uppercase; margin-top:2px;', textContent: type + ' Address' })
-            ]),
-            cel('div', { style: 'display:flex; gap:4px;' }, [
-                isBilling ? cel('span', { class: 'pf-badge p-purple', textContent: 'Billing' }) : null,
-                isShipping ? cel('span', { class: 'pf-badge p-cyan', textContent: 'Shipping' }) : null
-            ].filter(Boolean))
-        ]),
-        cel('div', { style: 'margin-bottom:10px;' }, [
-            cel('div', { style: 'font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; margin-bottom:2px;', textContent: 'Location Address' }),
-            cel('div', { style: 'color:#334155; line-height:1.5;', textContent: fullLocation })
-        ]),
-        gstin ? cel('div', { style: 'background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;' }, [
-            cel('span', { style: 'font-size:12px; font-weight:600; color:var(--indigo);' }, ['GSTIN: ' + gstin]),
-            gstCategory ? cel('span', { style: 'font-size:11px; color:#64748b;' }, ['Category: ' + gstCategory]) : null
-        ]) : null
-    );
-}
-
-function openAddressEditModal(docname = null, defaultType = 'Billing') {
-    const modal = document.getElementById('pf-address-modal-overlay');
-    if (!modal) return;
-
-    populateAddressMetaOptions();
-
-    const headingEl = document.getElementById('pam-modal-heading');
-    const docnameInput = document.getElementById('pam-docname');
-
-    docnameInput.value = docname || '';
-
-    if (docname) {
-        if (headingEl) headingEl.textContent = "Edit Address";
-        const addr = (portalData.addresses || []).find(a => a.name === docname);
-        if (addr) {
-            document.getElementById('pam-title').value = addr.address_title || '';
-            const typeSelect = document.getElementById('pam-type');
-            if (typeSelect) typeSelect.value = addr.address_type || defaultType;
-            document.getElementById('pam-line1').value = addr.address_line1 || '';
-            document.getElementById('pam-line2').value = addr.address_line2 || '';
-            document.getElementById('pam-city').value = addr.city || '';
-            document.getElementById('pam-state').value = addr.state || '';
-            document.getElementById('pam-country').value = addr.country || 'India';
-            document.getElementById('pam-pincode').value = addr.pincode || '';
-            document.getElementById('pam-gstin').value = addr.gstin || '';
-            const gstSelect = document.getElementById('pam-gst-category');
-            if (gstSelect) gstSelect.value = addr.gst_category || '';
-            document.getElementById('pam-is-primary-billing').checked = Boolean(addr.is_primary_address);
-            document.getElementById('pam-is-primary-shipping').checked = Boolean(addr.is_shipping_address);
-        }
-    } else {
-        if (headingEl) headingEl.textContent = "New Address";
-        document.getElementById('pam-title').value = '';
-        const typeSelect = document.getElementById('pam-type');
-        if (typeSelect) typeSelect.value = defaultType || 'Billing';
-        document.getElementById('pam-line1').value = '';
-        document.getElementById('pam-line2').value = '';
-        document.getElementById('pam-city').value = '';
-        document.getElementById('pam-state').value = '';
-        document.getElementById('pam-country').value = 'India';
-        document.getElementById('pam-pincode').value = '';
-        document.getElementById('pam-gstin').value = (portalData.customer_info && portalData.customer_info.gstin) || '';
-        const gstSelect = document.getElementById('pam-gst-category');
-        if (gstSelect) gstSelect.value = '';
-        document.getElementById('pam-is-primary-billing').checked = (defaultType === 'Billing');
-        document.getElementById('pam-is-primary-shipping').checked = (defaultType === 'Shipping');
-    }
-
-    goToAddressWizardStep(1);
-
-    modal.style.display = 'flex';
-    modal.offsetHeight;
-    modal.classList.add('pf-modal-show');
-}
-
-function closeAddressEditModal() {
-    const modal = document.getElementById('pf-address-modal-overlay');
-    if (modal) {
-        modal.classList.remove('pf-modal-show');
-        setTimeout(() => {
-            modal.style.display = 'none';
-        }, 250);
-    }
-}
-
-// Global ESC key listener to close active modals
-document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' || e.key === 'Esc') {
-        const compModal = document.getElementById('pf-company-modal-overlay');
-        if (compModal && compModal.classList.contains('pf-modal-show')) {
-            closeEditCompanyModal();
-        }
-        const addrModal = document.getElementById('pf-address-modal-overlay');
-        if (addrModal && addrModal.style.display !== 'none') {
-            closeAddressEditModal();
-        }
-        const globalModal = document.getElementById('pf-global-modal-overlay');
-        if (globalModal && globalModal.style.display !== 'none') {
-            closePortalModalPopup();
-        }
-    }
-});
-
-function savePortalAddress() {
-    const saveBtn = document.getElementById('pam-save-btn');
-    if (saveBtn && saveBtn.disabled) return;
-
-    const docname = document.getElementById('pam-docname').value;
-    const title = document.getElementById('pam-title').value.trim();
-    const type = document.getElementById('pam-type').value;
-    const line1 = document.getElementById('pam-line1').value.trim();
-    const line2 = document.getElementById('pam-line2').value.trim();
-    const city = document.getElementById('pam-city').value.trim();
-    const state = document.getElementById('pam-state').value.trim();
-    const country = document.getElementById('pam-country').value.trim() || 'India';
-    const pincode = document.getElementById('pam-pincode').value.trim();
-    const gstin = document.getElementById('pam-gstin').value.trim();
-    const gstCategory = document.getElementById('pam-gst-category').value;
-    const isPrimaryBilling = document.getElementById('pam-is-primary-billing').checked ? 1 : 0;
-    const isPrimaryShipping = document.getElementById('pam-is-primary-shipping').checked ? 1 : 0;
-
-    if (!line1 || !city) {
-        showPortalModalPopup("Please fill in required fields: Address Line 1 and City.", "Validation Notice", "error");
-        return;
-    }
-
-    if (gstin) {
-        const gstinRegex = /^[0-9]{2}[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}[1-9A-Za-z]{1}Z[0-9A-Za-z]{1}$/;
-        if (!gstinRegex.test(gstin)) {
-            showPortalModalPopup("Invalid GSTIN format! Please enter a valid 15-character GSTIN (e.g. 22AAAAA0000A1Z5).", "Validation Error", "error");
-            return;
-        }
-    }
-
-    let origHtml = '';
-    if (saveBtn) {
-        saveBtn.disabled = true;
-        origHtml = saveBtn.innerHTML;
-        saveBtn.innerHTML = '<i class="ti ti-loader spin"></i> Saving...';
-    }
-
-    frappe.call({
-        method: "customer_portal.api.save_portal_address",
-        args: {
-            docname: docname || null,
-            address_title: title,
-            address_type: type,
-            address_line1: line1,
-            address_line2: line2,
-            city: city,
-            state: state,
-            country: country,
-            pincode: pincode,
-            gstin: gstin,
-            gst_category: gstCategory,
-            is_primary_billing: isPrimaryBilling,
-            is_primary_shipping: isPrimaryShipping
-        },
-        callback: function (r) {
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = origHtml || 'Save Address';
-            }
-            if (r.message && r.message.status === "success") {
-                closeAddressEditModal();
-                showPortalModalPopup(docname ? "Address updated successfully!" : "Address saved successfully!", "Success", "success");
-                fetchPortalData();
-            } else {
-                const errMsg = extractFrappeErrorMessage(r);
-                showPortalModalPopup(errMsg || "An error occurred while saving address.", "Error", "error");
-            }
-        },
-        error: function (r) {
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = origHtml || 'Save Address';
-            }
-            const errMsg = extractFrappeErrorMessage(r);
-            showPortalModalPopup(errMsg || "Failed to save address.", "Error", "error");
-        }
-    });
-}
-
-function renderPortal() {
-    const companyName = portalData.customer_info.customer_name;
-    // userEmail will be populated dynamically or loaded from local global
-    const emailToUse = window.userEmail || '';
-
-    const userEmailLower = emailToUse.toLowerCase().trim();
-    let userContact = null;
-    if (userEmailLower && portalData.contacts && portalData.contacts.length > 0) {
-        userContact = portalData.contacts.find(c => c.email_id && c.email_id.toLowerCase().trim() === userEmailLower);
-    }
-    if (!userContact && portalData.contacts && portalData.contacts.length > 0) {
-        userContact = portalData.contacts.find(c => c.is_primary_contact) || portalData.contacts[0];
-    }
-
-    let contactFirstName = "User";
-    let userDisplayName = emailToUse;
-    let avatarWord = "--";
-
-    if (userContact) {
-        contactFirstName = userContact.first_name || "User";
-        const lastName = userContact.last_name ? userContact.last_name.trim() : "";
-        userDisplayName = (contactFirstName + (lastName ? " " + lastName : "")).trim();
-
-        if (contactFirstName && lastName) {
-            avatarWord = (contactFirstName[0] + lastName[0]).toUpperCase();
-        } else if (contactFirstName) {
-            avatarWord = contactFirstName.substring(0, 2).toUpperCase();
-        }
-    } else if (emailToUse) {
-        contactFirstName = emailToUse.split('@')[0];
-        userDisplayName = emailToUse;
-        const cleanEmail = emailToUse.replace(/[^a-zA-Z]/g, '');
-        avatarWord = cleanEmail.substring(0, 2).toUpperCase() || "US";
-    } else if (companyName) {
-        avatarWord = companyName.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
-    }
-
-    const sidebarCompanyEl = document.getElementById('sidebar-company');
-    if (sidebarCompanyEl) {
-        sidebarCompanyEl.textContent = companyName || '';
-        sidebarCompanyEl.title = companyName || '';
-    }
-    const sidebarUserEl = document.getElementById('sidebar-user');
-    if (sidebarUserEl) {
-        sidebarUserEl.textContent = userDisplayName || '';
-        sidebarUserEl.title = userDisplayName || '';
-    }
-    document.getElementById('sidebar-avatar').textContent = avatarWord;
-    document.getElementById('overview-username').textContent = contactFirstName;
-
-    document.getElementById('stat-active-licenses').textContent = portalData.stats.active_licenses;
-    document.getElementById('stat-open-tickets').textContent = portalData.stats.open_tickets;
-
-    const nextDays = portalData.stats.next_renewal_days;
-    document.getElementById('stat-next-renewal').textContent = nextDays !== null ? (nextDays + ' days') : '-';
-
-    const openInvCount = portalData.stats.open_invoices_count;
-    const openInvAmt = portalData.stats.open_invoices_amount;
-    const openAmtStr = formatCurrency(openInvAmt);
-    document.getElementById('stat-open-invoices').replaceChildren(
-        document.createTextNode(openAmtStr + ' '),
-        cel('small', { id: 'stat-open-invoices-sub', textContent: `· ${openInvCount} due` })
-    );
-
-    const latestInv = portalData.invoices.length ? portalData.invoices[0].name : "None";
-    document.getElementById('qa-invoice-desc').textContent = `Latest: ${latestInv}`;
-    document.getElementById('qa-contact-desc').textContent = `${portalData.contacts.length} on this account`;
-
-    const upcomingRenewals = portalData.renewals.filter(r => r.status === "Active" && r.end_date);
-    if (upcomingRenewals.length > 0) {
-        const bannerRen = upcomingRenewals[0];
-        const nextRenDays = dateDiffInDays(new Date(), new Date(bannerRen.end_date));
-        if (nextRenDays >= 0 && nextRenDays <= 60) {
-            document.getElementById('overview-banner-title').textContent = `Your ${bannerRen.product_name} license renews in ${nextRenDays} days`;
-            document.getElementById('overview-banner-subtitle').textContent = `${bannerRen.total_quantity} Qty · ${formatCurrency(bannerRen.total_amount)} · Auto-renew is on`;
-            document.getElementById('overview-banner').style.display = 'flex';
-        } else {
-            document.getElementById('overview-banner').style.display = 'none';
-        }
-    } else {
-        document.getElementById('overview-banner').style.display = 'none';
-    }
-
-    const activeOrder = portalData.orders.find(o => o.status !== "Completed" && o.status !== "Cancelled");
-    if (activeOrder) {
-        document.getElementById('overview-order-title').textContent = `Order ${activeOrder.name} — ${activeOrder.status}`;
-        const trackDiv = document.getElementById('overview-order-track');
-        trackDiv.replaceChildren();
-
-        const steps = ["Placed", "Confirmed", "Processing", "Shipped", "Delivered"];
-        let currentStepIndex = 1;
-        if (activeOrder.status === "To Deliver and Bill" || activeOrder.status === "To Deliver") {
-            currentStepIndex = 2;
-        } else if (activeOrder.delivery_status === "Partially Delivered") {
-            currentStepIndex = 3;
-        } else if (activeOrder.delivery_status === "Fully Delivered") {
-            currentStepIndex = 4;
-        }
-
-        steps.forEach((step, idx) => {
-            const stepClass = idx < currentStepIndex ? "pf-step done" : (idx === currentStepIndex ? "pf-step now" : "pf-step");
-            const dotContent = idx < currentStepIndex ? cel('i', { class: 'ti ti-check' }) : document.createTextNode(String(idx + 1));
-
-            trackDiv.appendChild(cel('div', { class: stepClass }, [
-                cel('div', { class: 'pf-dot' }, [dotContent]),
-                cel('div', { class: 'l', textContent: step })
-            ]));
         });
-
-        const estDate = activeOrder.delivery_date ? formatDate(activeOrder.delivery_date) : "soon";
-        document.getElementById('overview-order-footer').textContent = `Expected delivery by ${estDate}`;
-        document.getElementById('overview-order-section').style.display = 'block';
-    } else {
-        document.getElementById('overview-order-section').style.display = 'none';
     }
+}
 
-    const recentInvsDiv = document.getElementById('overview-invoices-list');
-    recentInvsDiv.replaceChildren();
-    if (portalData.invoices.length === 0) {
-        recentInvsDiv.appendChild(renderEmptyState("No invoices found."));
-    } else {
-        portalData.invoices.slice(0, 2).forEach(inv => {
-            recentInvsDiv.appendChild(renderInvoiceRow(inv));
+function loadMore(pageName) {
+    if (listState[pageName]) {
+        const curLimit = listState[pageName].limit || 10;
+        listState[pageName].limit += curLimit;
+        if (pageName === 'renewals') renderRenewals();
+        else if (pageName === 'invoices') renderInvoices();
+        else if (pageName === 'tickets') renderTickets();
+    }
+}
+
+function changePageSize(pageName, val) {
+    if (listState[pageName]) {
+        const numVal = parseInt(val, 10) || 10;
+        listState[pageName].limit = numVal;
+        if (pageName === 'renewals') renderRenewals();
+        else if (pageName === 'invoices') renderInvoices();
+        else if (pageName === 'tickets') renderTickets();
+    }
+}
+
+// Setup Event Listeners for Search Inputs, Status Tabs, & Document Clicks
+function setupEventListeners() {
+    // Search Inputs
+    const renSearch = document.getElementById('renewals-search-input');
+    if (renSearch) {
+        renSearch.addEventListener('input', function () {
+            listState.renewals.search = this.value;
+            listState.renewals.limit = getPageSize('renewals');
+            renderRenewals();
         });
     }
 
-    const recentTicketsDiv = document.getElementById('overview-tickets-list');
-    recentTicketsDiv.replaceChildren();
-    if (portalData.support.tickets.length === 0) {
-        recentTicketsDiv.appendChild(renderEmptyState("No support tickets raised."));
-    } else {
-        portalData.support.tickets.slice(0, 2).forEach(ticket => {
-            recentTicketsDiv.appendChild(renderTicketRow(ticket));
+    const invSearch = document.getElementById('invoices-search-input');
+    if (invSearch) {
+        invSearch.addEventListener('input', function () {
+            listState.invoices.search = this.value;
+            listState.invoices.limit = getPageSize('invoices');
+            renderInvoices();
         });
     }
 
-    const metaStatuses = portalData.status_options || {};
-
-    document.getElementById('renewals-sub-title').textContent = `${portalData.renewals.length} licenses on this account`;
-    populateStatusDropdown('renewal-status-filter', metaStatuses.renewals, portalData.renewals, r => r.status);
-    paginationState.renewals.data = portalData.renewals || [];
-    paginationState.renewals.limit = 10;
-    const renSelect = document.getElementById(paginationState.renewals.sizeId);
-    if (renSelect) renSelect.value = "10";
-    renderPaginatedList('renewals');
-
-    document.getElementById('invoices-sub-title').textContent = `${portalData.invoices.length} invoices on this account`;
-    populateStatusDropdown('invoice-status-filter', metaStatuses.invoices, portalData.invoices, inv => inv.status);
-    paginationState.invoices.data = portalData.invoices || [];
-    paginationState.invoices.limit = 10;
-    const invSelect = document.getElementById(paginationState.invoices.sizeId);
-    if (invSelect) invSelect.value = "10";
-    renderPaginatedList('invoices');
-
-    document.getElementById('orders-sub-title').textContent = `${portalData.orders.length} orders on this account`;
-    populateStatusDropdown('order-status-filter', metaStatuses.orders, portalData.orders, o => o.status);
-    paginationState.orders.data = portalData.orders || [];
-    paginationState.orders.limit = 10;
-    const ordSelect = document.getElementById(paginationState.orders.sizeId);
-    if (ordSelect) ordSelect.value = "10";
-    renderPaginatedList('orders');
-
-    document.getElementById('support-sub-title').textContent = `${(portalData.support.tickets || []).length} tickets on this account`;
-    populateStatusDropdown('ticket-status-filter', metaStatuses.support, portalData.support.tickets, t => t.status);
-
-    paginationState.support.data = portalData.support.tickets || [];
-    paginationState.support.limit = 10;
-    const supSelect = document.getElementById(paginationState.support.sizeId);
-    if (supSelect) supSelect.value = "10";
-    renderPaginatedList('support');
-
-    // ticket-category is now a model card picker (no <select>); sync issue_types to CP_QUERY_TYPES if needed
-    const categorySelect = document.getElementById('ticket-category');
-    if (categorySelect) {
-        categorySelect.replaceChildren();
-        portalData.support.issue_types.forEach(cat => {
-            categorySelect.appendChild(cel('option', { value: cat, textContent: cat }));
-        });
-        if (portalData.support.issue_types.includes("Other")) {
-            categorySelect.value = "Other";
-        }
-    }
-
-    const prioritySelect = document.getElementById('ticket-priority');
-    if (prioritySelect) {
-        prioritySelect.replaceChildren();
-        const orderedPriorities = ["Medium", "High", "Low"].filter(p => portalData.support.priorities.includes(p));
-        portalData.support.priorities.forEach(pr => {
-            if (!orderedPriorities.includes(pr)) orderedPriorities.push(pr);
-        });
-        orderedPriorities.forEach(pr => {
-            prioritySelect.appendChild(cel('option', { value: pr, textContent: pr }));
+    const tktSearch = document.getElementById('tickets-search-input');
+    if (tktSearch) {
+        tktSearch.addEventListener('input', function () {
+            listState.tickets.search = this.value;
+            listState.tickets.limit = getPageSize('tickets');
+            renderTickets();
         });
     }
 
-    document.getElementById('contacts-sub-title').textContent = `${portalData.contacts.length} people on this account`;
-    paginationState.contacts.data = portalData.contacts || [];
-    paginationState.contacts.limit = 10;
-    const conSelect = document.getElementById(paginationState.contacts.sizeId);
-    if (conSelect) conSelect.value = "10";
-    renderPaginatedList('contacts');
+    const globalSearch = document.getElementById('global-search-input');
+    if (globalSearch) {
+        globalSearch.addEventListener('input', function () {
+            const val = this.value;
+            listState.renewals.search = val;
+            listState.invoices.search = val;
+            listState.tickets.search = val;
+            listState.renewals.limit = getPageSize('renewals');
+            listState.invoices.limit = getPageSize('invoices');
+            listState.tickets.limit = getPageSize('tickets');
+            renderRenewals();
+            renderInvoices();
+            renderTickets();
+        });
+    }
 
-    const custName = (portalData.customer_info && portalData.customer_info.customer_name) || '';
-    const imgUrl = portalData.customer_info && portalData.customer_info.image;
-
-    const legalVal = document.getElementById('settings-legal-name-val');
-    if (legalVal) legalVal.textContent = custName || '-';
-
-    const gstinVal = document.getElementById('settings-gstin-val');
-    if (gstinVal) gstinVal.textContent = (portalData.customer_info && portalData.customer_info.gstin) || '-';
-
-    const iconCircle = document.getElementById('pf-company-icon-circle');
-    if (iconCircle) {
-        iconCircle.replaceChildren();
-        if (imgUrl && imgUrl.trim()) {
-            const imgEl = cel('img', {
-                src: imgUrl.trim(),
-                alt: custName,
-                class: 'pf-company-avatar-img',
-                onerror: function () {
-                    const initials = getCompanyInitials(custName);
-                    this.replaceWith(cel('span', { class: 'pf-company-initials', textContent: initials }));
-                }
+    // Status Tab Row Listeners
+    ['renewals', 'invoices', 'tickets'].forEach(pageName => {
+        const tabsRow = document.getElementById(`${pageName}-tabs-row`);
+        if (tabsRow) {
+            tabsRow.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function () {
+                    tabsRow.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+                    this.classList.add('on');
+                    const status = this.getAttribute('data-status') || 'all';
+                    listState[pageName].status = status;
+                    listState[pageName].limit = getPageSize(pageName);
+                    if (pageName === 'renewals') renderRenewals();
+                    else if (pageName === 'invoices') renderInvoices();
+                    else if (pageName === 'tickets') renderTickets();
+                });
             });
-            iconCircle.appendChild(imgEl);
-        } else {
-            const initials = getCompanyInitials(custName);
-            iconCircle.appendChild(cel('span', { class: 'pf-company-initials', textContent: initials }));
-        }
-    }
-
-    renderAddressesList();
-
-    // Restore active tab or detail sub-page based on URL path or hash
-    handleUrlRoute();
-}
-
-function getCompanyInitials(name) {
-    if (!name || typeof name !== 'string') return 'CO';
-    const cleanStr = name.replace(/[\(\)\[\]]/g, ' ').trim();
-    const words = cleanStr.split(/\s+/).filter(w => w.length > 0);
-    if (words.length >= 2) {
-        return (words[0][0] + words[1][0]).toUpperCase();
-    } else if (words.length === 1) {
-        return words[0].substring(0, 2).toUpperCase();
-    }
-    return 'CO';
-}
-
-// Helper to construct secure SVG elements (strictly XSS safe)
-function csvg(tag, attrs = {}, children = []) {
-    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (const [k, v] of Object.entries(attrs)) {
-        el.setAttribute(k, v);
-    }
-    for (const child of children) {
-        el.appendChild(child);
-    }
-    return el;
-}
-
-function initMobileMenuToggles() {
-    document.querySelectorAll('.pf-top').forEach(pfTop => {
-        const titleDiv = pfTop.querySelector('div:first-child');
-        if (titleDiv && !titleDiv.querySelector('.pf-menu-toggle')) {
-            // Apply layout styles
-            titleDiv.style.display = 'flex';
-            titleDiv.style.alignItems = 'flex-start';
-            titleDiv.style.gap = '12px';
-
-            // Create inline hamburger SVG
-            const svgIcon = csvg('svg', {
-                width: '24',
-                height: '24',
-                viewBox: '0 0 24 24',
-                fill: 'none',
-                stroke: 'currentColor',
-                'stroke-width': '2.5',
-                'stroke-linecap': 'round',
-                'stroke-linejoin': 'round'
-            }, [
-                csvg('line', { x1: '3', y1: '12', x2: '21', y2: '12' }),
-                csvg('line', { x1: '3', y1: '6', x2: '21', y2: '6' }),
-                csvg('line', { x1: '3', y1: '18', x2: '21', y2: '18' })
-            ]);
-
-            // Create the hamburger menu toggle button
-            const toggleBtn = cel('button', {
-                class: 'pf-menu-toggle',
-                onclick: (e) => {
-                    e.stopPropagation();
-                    toggleMobileSidebar(true);
-                }
-            }, [
-                svgIcon
-            ]);
-
-            // Move title elements to a vertical text group block
-            const textGroup = cel('div');
-            while (titleDiv.firstChild) {
-                textGroup.appendChild(titleDiv.firstChild);
-            }
-
-            titleDiv.appendChild(toggleBtn);
-            titleDiv.appendChild(textGroup);
         }
     });
-}
 
-window.addEventListener('popstate', () => handleUrlRoute());
-window.addEventListener('hashchange', () => handleUrlRoute());
+    // Dismiss account dropdown when clicking outside
+    document.addEventListener('click', function (e) {
+        const isClickInside = e.target.closest('.pf-account-dropdown') || e.target.closest('#topbar-avatar') || e.target.closest('#side-acct-btn');
+        if (!isClickInside) {
+            closeAccountDropdown();
+        }
+    });
 
-function toggleAccountDropdown(e) {
-    if (e) e.stopPropagation();
-    const drop = document.getElementById('pf-account-dropdown');
-    if (!drop) return;
-    const isOpen = drop.classList.contains('show');
-    closeAccountDropdown();
-    if (!isOpen) {
-        drop.classList.add('show');
-    }
-}
-
-function closeAccountDropdown() {
-    const drop = document.getElementById('pf-account-dropdown');
-    if (drop) drop.classList.remove('show');
-}
-
-document.addEventListener('click', function (e) {
-    const btn = document.getElementById('pf-account-btn');
-    if (btn && !btn.contains(e.target)) {
-        closeAccountDropdown();
-    }
-});
-
-function handleLogout() {
-    if (typeof frappe !== 'undefined' && typeof frappe.call === 'function') {
-        frappe.call({
-            method: 'logout',
-            callback: function () {
-                window.location.href = '/login';
-            },
-            error: function () {
-                window.location.href = '/login';
-            }
-        });
-    } else {
-        window.location.href = '/login';
-    }
-}
-
-window.addEventListener('DOMContentLoaded', (event) => {
-    initMobileMenuToggles();
-    fetchPortalData();
-
-    // Close Scope of Work modal when clicking the backdrop (outside the dialog)
-    const scopeModal = document.getElementById('sd-scope-modal');
-    if (scopeModal) {
-        scopeModal.addEventListener('click', function (e) {
+    // Close PDF preview modal or any popup modal on backdrop click
+    document.querySelectorAll('.cp-modal-backdrop').forEach(modal => {
+        modal.addEventListener('click', function (e) {
             if (e.target === this) {
-                closePortalScopeModal();
+                closeAllModals();
             }
         });
-    }
+    });
+
+    // Window history listeners for Back / Forward / Route restoration
+    window.addEventListener('popstate', () => handleUrlRoute());
+    window.addEventListener('hashchange', () => handleUrlRoute());
+}
+
+// Auto-initialize on page load
+document.addEventListener('DOMContentLoaded', function () {
+    setupEventListeners();
+    fetchPortalData();
 });
