@@ -14,6 +14,25 @@ let portalData = null;
 let currentTicket = null;
 let currentInvoice = null;
 
+function getCompanyAbbr() {
+    return portalData?.company_info?.abbr || '64 NSPL';
+}
+
+function getCompanyName() {
+    return portalData?.company_info?.company_name || 'NETWORK SECURITY';
+}
+
+function updateDocumentTitle(pageTitle, detailName = null) {
+    const compAbbr = getCompanyAbbr();
+    if (detailName) {
+        document.title = `${detailName} | ${pageTitle} - ${compAbbr}`;
+    } else if (pageTitle) {
+        document.title = `${pageTitle} - ${compAbbr}`;
+    } else {
+        document.title = compAbbr;
+    }
+}
+
 // Page List States for filtering and pagination
 const listState = {
     renewals: { search: '', status: 'active', limit: 10 },
@@ -28,6 +47,10 @@ function cel(tag, attrs = {}, children = []) {
         if (k === 'class') el.className = v;
         else if (k === 'style') el.style.cssText = v;
         else if (k === 'textContent') el.textContent = v;
+        else if (k === 'innerHTML') el.innerHTML = v;
+        else if (k === 'checked') el.checked = Boolean(v);
+        else if (k === 'disabled') el.disabled = Boolean(v);
+        else if (k === 'value') el.value = (v === null || v === undefined) ? '' : v;
         else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.substring(2).toLowerCase(), v);
         else el.setAttribute(k, v);
     }
@@ -285,6 +308,9 @@ function go(name, el, skipHash, statusFilter) {
             topbarTitle.appendChild(sub);
         }
     }
+    if (t && t[0]) {
+        updateDocumentTitle(t[0]);
+    }
 
     const content = document.querySelector('.content');
     if (content) content.scrollTop = 0;
@@ -378,21 +404,57 @@ function handleUrlRoute() {
     }
 }
 
+// Admin & System User Customer Switcher State
+let adminPermittedCustomers = [];
+let activeAdminCustomer = null;
+
 // Fetch Portal Data from Frappe Backend
-function fetchPortalData(onComplete) {
+function fetchPortalData(targetCustomer, onComplete) {
+    if (typeof targetCustomer === 'function') {
+        onComplete = targetCustomer;
+        targetCustomer = null;
+    }
+
     if (!window.frappe || !window.frappe.call) {
         console.log("Frappe call not available in static environment.");
         return;
     }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const custParam = targetCustomer || urlParams.get('customer') || sessionStorage.getItem('cp_active_customer');
+
     frappe.call({
         method: "customer_portal.api.get_portal_data",
+        args: custParam ? { customer_name: custParam } : {},
         callback: function (r) {
             if (r.message) {
-                if (r.message.error) {
-                    console.error(r.message.error);
+                if (r.message.permission_denied) {
+                    showPermissionDeniedScreen(r.message.error, r.message.permitted_customers);
                     return;
                 }
+                if (r.message.needs_customer_selection) {
+                    adminPermittedCustomers = r.message.permitted_customers || [];
+                    openAdminCustomerModal();
+                    return;
+                }
+                if (r.message.error) {
+                    showPermissionDeniedScreen(r.message.error);
+                    return;
+                }
+
+                hidePermissionDeniedScreen();
                 portalData = r.message;
+
+                // Handle System User Admin Switcher UI
+                if (portalData.is_system_user) {
+                    const custName = portalData.customer_info?.customer_name || portalData.customer_info?.name;
+                    activeAdminCustomer = custName;
+                    sessionStorage.setItem('cp_active_customer', custName);
+                    renderAdminViewingBadge(custName);
+                } else {
+                    hideAdminViewingBadge();
+                }
+
                 renderPortal();
                 if (!onComplete) {
                     handleUrlRoute();
@@ -402,6 +464,156 @@ function fetchPortalData(onComplete) {
                 }
             }
         }
+    });
+}
+
+function renderAdminViewingBadge(customerName) {
+    const badge = document.getElementById('admin-viewing-badge');
+    const nameEl = document.getElementById('admin-viewing-cust-name');
+    if (badge && nameEl) {
+        nameEl.textContent = customerName || 'Select Customer';
+        badge.style.display = 'inline-flex';
+    }
+}
+
+function hideAdminViewingBadge() {
+    const badge = document.getElementById('admin-viewing-badge');
+    if (badge) badge.style.display = 'none';
+}
+
+function showPermissionDeniedScreen(msg, permittedList) {
+    if (permittedList) adminPermittedCustomers = permittedList;
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
+    const deniedPage = document.getElementById('page-permission-denied');
+    if (deniedPage) {
+        deniedPage.style.display = 'block';
+        deniedPage.classList.add('on');
+    }
+    const msgEl = document.getElementById('portal-perm-denied-msg');
+    if (msgEl) msgEl.textContent = msg || 'You do not have permission to view this customer account.';
+}
+
+function hidePermissionDeniedScreen() {
+    const deniedPage = document.getElementById('page-permission-denied');
+    if (deniedPage) {
+        deniedPage.style.display = 'none';
+        deniedPage.classList.remove('on');
+    }
+}
+
+let adminCustSearchTimer = null;
+
+function openAdminCustomerModal() {
+    const modal = document.getElementById('modal-admin-select-customer');
+    if (modal) {
+        modal.style.display = 'flex';
+        const searchInput = document.getElementById('admin-cust-search-input');
+        if (searchInput) {
+            searchInput.value = '';
+            setTimeout(() => searchInput.focus(), 150);
+        }
+
+        // Fetch initial top 20 customers
+        frappe.call({
+            method: 'customer_portal.api.get_permitted_customers',
+            args: { limit: 20 },
+            callback: function (r) {
+                adminPermittedCustomers = r.message || [];
+                renderAdminCustomerList(adminPermittedCustomers);
+            }
+        });
+    }
+}
+
+function closeAdminCustomerModal() {
+    const modal = document.getElementById('modal-admin-select-customer');
+    if (modal) modal.style.display = 'none';
+}
+
+function renderAdminCustomerList(customers) {
+    const container = document.getElementById('admin-cust-modal-list');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (!customers || customers.length === 0) {
+        container.appendChild(cel('div', {
+            style: 'text-align:center;padding:24px;color:var(--ink-soft);font-size:13px;',
+            textContent: 'No matching customers found or accessible.'
+        }));
+        return;
+    }
+
+    customers.forEach(c => {
+        const isCurrent = activeAdminCustomer && (c.name === activeAdminCustomer || c.customer_name === activeAdminCustomer);
+        const card = cel('div', {
+            class: `admin-cust-card ${isCurrent ? 'active' : ''}`,
+            style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#ffffff;border:1px solid var(--line);border-radius:10px;cursor:pointer;transition:all 0.2s ease;',
+            onclick: () => selectAdminCustomer(c.name)
+        }, [
+            cel('div', { style: 'display:flex;align-items:center;gap:12px;' }, [
+                cel('div', {
+                    style: 'width:36px;height:36px;border-radius:8px;background:var(--blue-light);color:var(--blue);display:grid;place-items:center;font-weight:700;font-size:14px;flex-shrink:0;'
+                }, [(c.customer_name || c.name || 'C')[0].toUpperCase()]),
+                cel('div', {}, [
+                    cel('div', { style: 'font-weight:600;font-size:13.5px;color:var(--ink);' }, [c.customer_name || c.name]),
+                    cel('div', { style: 'font-size:11.5px;color:var(--ink-soft);margin-top:2px;' }, [
+                        [c.customer_group, c.territory].filter(Boolean).join(' · ') || c.name
+                    ])
+                ])
+            ]),
+            isCurrent ? cel('span', {
+                style: 'font-size:11px;font-weight:700;color:var(--green);background:var(--green-wash);padding:4px 8px;border-radius:6px;'
+            }, ['ACTIVE']) : cel('i', { class: 'ti ti-chevron-right', style: 'color:var(--ink-soft);' })
+        ]);
+
+        card.onmouseenter = () => { if (!isCurrent) card.style.borderColor = 'var(--blue)'; card.style.background = 'var(--bg)'; };
+        card.onmouseleave = () => { if (!isCurrent) card.style.borderColor = 'var(--line)'; card.style.background = '#ffffff'; };
+
+        container.appendChild(card);
+    });
+}
+
+function filterAdminCustomerList(searchTerm) {
+    const term = (searchTerm || '').trim();
+    if (adminCustSearchTimer) clearTimeout(adminCustSearchTimer);
+
+    // Immediate local match for responsive feel
+    if (adminPermittedCustomers && adminPermittedCustomers.length > 0) {
+        const localFiltered = adminPermittedCustomers.filter(c =>
+            (c.customer_name && c.customer_name.toLowerCase().includes(term.toLowerCase())) ||
+            (c.name && c.name.toLowerCase().includes(term.toLowerCase())) ||
+            (c.customer_group && c.customer_group.toLowerCase().includes(term.toLowerCase())) ||
+            (c.territory && c.territory.toLowerCase().includes(term.toLowerCase()))
+        );
+        if (localFiltered.length > 0 || !term) {
+            renderAdminCustomerList(localFiltered);
+        }
+    }
+
+    // Debounced live server search across entire database
+    adminCustSearchTimer = setTimeout(() => {
+        frappe.call({
+            method: 'customer_portal.api.get_permitted_customers',
+            args: { search_term: term, limit: term ? 50 : 20 },
+            callback: function (r) {
+                const results = r.message || [];
+                renderAdminCustomerList(results);
+            }
+        });
+    }, 200);
+}
+
+function selectAdminCustomer(customerName) {
+    closeAdminCustomerModal();
+    sessionStorage.setItem('cp_active_customer', customerName);
+
+    // Update URL parameter cleanly without reloading page
+    const url = new URL(window.location.href);
+    url.searchParams.set('customer', customerName);
+    window.history.replaceState({}, '', url.toString());
+
+    fetchPortalData(customerName, () => {
+        go('dashboard');
     });
 }
 
@@ -463,6 +675,22 @@ function renderHeader() {
 
     const greetName = document.getElementById('greet-name');
     if (greetName) greetName.textContent = `${userFullName} 👋`;
+
+    // Dynamic company branding from ERPNext Company
+    const compInfo = portalData.company_info || {};
+    const sideBrandMark = document.getElementById('side-brand-mark');
+    if (sideBrandMark) {
+        if (compInfo.logo && compInfo.logo.trim()) {
+            sideBrandMark.innerHTML = `<img src="${escapeHtml(compInfo.logo.trim())}" alt="Logo" onerror="this.replaceWith('${escapeHtml(compInfo.mark || '')}')"/>`;
+        } else {
+            sideBrandMark.textContent = compInfo.mark || '64';
+        }
+    }
+    const sideBrandName = document.getElementById('side-brand-name');
+    if (sideBrandName) {
+        sideBrandName.textContent = compInfo.display_name || compInfo.company_name || 'NETWORK SECURITY';
+        sideBrandName.title = compInfo.company_name || '';
+    }
 
     // Populate dropdown header elements
     ['topbar', 'side'].forEach(type => {
@@ -1241,6 +1469,9 @@ function openRenewalDetail(ren, skipHash) {
     }
 
     go('renewal-detail', null, true);
+    if (ren && (ren.product_name || ren.name)) {
+        updateDocumentTitle('Renewal Details', ren.product_name || ren.name);
+    }
     if (!skipHash && ren && ren.name) {
         updateUrlPath('renewals/' + encodeURIComponent(ren.name));
     }
@@ -1440,6 +1671,9 @@ function openInvoiceDetail(inv, skipHash) {
     }
 
     go('invoice-detail', null, true);
+    if (inv && inv.name) {
+        updateDocumentTitle('Invoice Details', inv.name);
+    }
     if (!skipHash && inv && inv.name) {
         updateUrlPath('invoices/' + encodeURIComponent(inv.name));
     }
@@ -1704,7 +1938,7 @@ function renderTickets() {
     if (search) {
         items = items.filter(t => {
             const dispSt = getTicketDisplayStatus(t);
-            const txt = `${t.name || ''} ${t.subject || ''} ${t.issue_type || ''} ${t.priority || ''} ${dispSt} ${t.raised_by || ''}`.toLowerCase();
+            const txt = `${t.name || ''} ${t.subject || ''} ${t.custom_query_type || t.category || ''} ${t.priority || ''} ${dispSt} ${t.raised_by || ''}`.toLowerCase();
             return txt.includes(search);
         });
     }
@@ -1843,41 +2077,55 @@ function renderTicketHappeningNow(ticket) {
     }
 }
 
+let allConversationMessages = [];
+let showAllConversation = false;
+
 function renderTicketConversation(communications, ticket) {
     const convoEl = document.getElementById('sd-conversation-list');
     if (!convoEl) return;
 
     convoEl.replaceChildren();
 
-    const comms = Array.isArray(communications) && communications.length > 0 ? communications : (ticket && ticket.comments ? ticket.comments : []);
+    const comms = Array.isArray(communications) && communications.length > 0
+        ? communications
+        : (ticket && ticket.comments ? ticket.comments : []);
 
-    if (ticket && ticket.description) {
-        const userMsg = document.createElement('div');
-        userMsg.className = 'tkt-convo-item';
-        const senderName = ticket.person_name || ticket.raised_by_details?.full_name || portalData.customer_info?.customer_name || 'You';
-        const initials = getInitials(senderName);
+    allConversationMessages = comms;
 
-        userMsg.innerHTML = `
-            <div class="tkt-convo-avatar">${initials}</div>
-            <div class="tkt-convo-body">
-                <div class="tkt-convo-header">
-                    <span class="tkt-convo-author">${safeEscape(senderName)} (Author)</span>
-                    <span class="tkt-convo-time">${formatDate(ticket.creation)}</span>
-                </div>
-                <div class="tkt-convo-bubble">${ticket.description}</div>
-            </div>
-        `;
-        convoEl.appendChild(userMsg);
-    }
-
-    if (!comms.length && (!ticket || !ticket.description)) {
-        convoEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--ink-soft);font-size:13px;">No message history recorded yet.</div>';
+    if (!comms.length) {
+        convoEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:13px;font-style:italic;">No replies recorded yet. Use the reply box below to send a message.</div>';
         return;
     }
 
-    comms.forEach(c => {
-        const isCustomer = c.sender === portalData.customer_info?.email || c.sender === frappe.session.user || (c.sender_full_name && (c.sender_full_name.includes('(You)') || c.sender_full_name === portalData.customer_info?.customer_name));
-        const authorName = c.sender_full_name || c.sender || (isCustomer ? 'You' : 'Technical Support Team');
+    // Limit display to latest 5 messages by default to avoid excessive space
+    const MAX_CONVO = 5;
+    const hasMore = comms.length > MAX_CONVO;
+    const displayComms = (!showAllConversation && hasMore) ? comms.slice(-MAX_CONVO) : comms;
+
+    if (hasMore) {
+        const topBar = document.createElement('div');
+        topBar.style.cssText = 'display:flex;justify-content:center;margin-bottom:14px;';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'td-btn';
+        toggleBtn.style.cssText = 'font-size:11.5px;padding:4px 14px;border-radius:20px;background:#f1f5f9;color:#0284c7;font-weight:600;cursor:pointer;';
+        toggleBtn.innerHTML = showAllConversation
+            ? '<i class="ti ti-chevron-up"></i> Collapse Older Messages'
+            : `<i class="ti ti-history"></i> View ${comms.length - MAX_CONVO} Older Message${comms.length - MAX_CONVO > 1 ? 's' : ''}`;
+        toggleBtn.onclick = function () {
+            showAllConversation = !showAllConversation;
+            renderTicketConversation(allConversationMessages, ticket);
+        };
+        topBar.appendChild(toggleBtn);
+        convoEl.appendChild(topBar);
+    }
+
+    displayComms.forEach(c => {
+        const senderEmail = (c.sender || c.comment_email || '').toLowerCase();
+        const currentCustEmail = (portalData?.customer_info?.email || frappe.session.user || '').toLowerCase();
+        const isCustomer = senderEmail === currentCustEmail || (c.sender_full_name && c.sender_full_name.includes('(You)'));
+
+        let authorName = c.sender_full_name || c.sender || (isCustomer ? 'Customer' : 'Support Team');
         const initials = getInitials(authorName);
         let bubbleContent = c.content || c.description || c.subject || '';
 
@@ -1900,10 +2148,10 @@ function renderTicketConversation(communications, ticket) {
             <div class="tkt-convo-avatar ${isCustomer ? '' : 'support'}">${initials}</div>
             <div class="tkt-convo-body">
                 <div class="tkt-convo-header">
-                    <span class="tkt-convo-author">${safeEscape(authorName)} ${isCustomer ? '(You)' : ''}</span>
-                    <span class="tkt-convo-time">${formatDate(c.creation || c.timestamp)}</span>
+                    <span class="tkt-convo-author">${safeEscape(authorName)} <span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;background:${isCustomer ? '#f0f9ff;color:#0284c7;border:1px solid #bae6fd;' : '#ecfdf5;color:#10b981;border:1px solid #a7f3d0;'};margin-left:6px;">${isCustomer ? 'Customer' : 'Support Team'}</span></span>
+                    <span class="tkt-convo-time">${formatRelativeTime(c.creation || c.timestamp)}</span>
                 </div>
-                <div class="tkt-convo-bubble">${bubbleContent}</div>
+                <div class="tkt-convo-bubble" style="${isCustomer ? 'background:#f8fafc;' : 'background:#f0fdf4;border-color:#bbf7d0;'}">${bubbleContent}</div>
             </div>
         `;
         convoEl.appendChild(msgItem);
@@ -1975,9 +2223,9 @@ function renderTicketSLA(ticket) {
     // Expected resolution text
     if (expectedResEl) {
         if (resolutionTarget) {
-            expectedResEl.textContent = formatDate(resolutionTarget);
+            expectedResEl.textContent = formatDateTime(resolutionTarget);
         } else if (isResolved && ticket.resolution_date) {
-            expectedResEl.textContent = formatDate(ticket.resolution_date);
+            expectedResEl.textContent = formatDateTime(ticket.resolution_date);
         } else {
             expectedResEl.textContent = 'Not specified';
         }
@@ -2045,16 +2293,16 @@ function renderTicketSLA(ticket) {
     // Response Box
     if (responseSlaVal) {
         if (hasResponded) {
-            responseSlaVal.innerHTML = `<i class="ti ti-check" style="color:var(--td-green, #10b981);"></i> Completed`;
+            responseSlaVal.innerHTML = `<i class="ti ti-check" style="color:var(--td-green, #10b981);"></i><span class="sla-val-txt">Completed</span>`;
             if (responseBox) responseBox.className = 'v done';
         } else if (isResponseOverdue) {
-            responseSlaVal.innerHTML = `<i class="ti ti-alert-circle" style="color:var(--td-red, #ef4444);"></i> Overdue (${formatDate(responseTarget)})`;
+            responseSlaVal.innerHTML = `<i class="ti ti-alert-circle" style="color:var(--td-red, #ef4444);"></i><span class="sla-val-txt">Overdue (${formatDateTime(responseTarget)})</span>`;
             if (responseBox) responseBox.className = 'v pending';
         } else if (responseTarget) {
-            responseSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> Due ${formatDate(responseTarget)}`;
+            responseSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i><span class="sla-val-txt">Due ${formatDateTime(responseTarget)}</span>`;
             if (responseBox) responseBox.className = 'v pending';
         } else {
-            responseSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> In Progress`;
+            responseSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i><span class="sla-val-txt">In Progress</span>`;
             if (responseBox) responseBox.className = 'v pending';
         }
     }
@@ -2062,16 +2310,16 @@ function renderTicketSLA(ticket) {
     // Resolution Box
     if (resolutionSlaVal) {
         if (isResolved) {
-            resolutionSlaVal.innerHTML = `<i class="ti ti-check" style="color:var(--td-green, #10b981);"></i> Completed`;
+            resolutionSlaVal.innerHTML = `<i class="ti ti-check" style="color:var(--td-green, #10b981);"></i><span class="sla-val-txt">Completed</span>`;
             if (resolutionBox) resolutionBox.className = 'v done';
         } else if (isResolutionOverdue) {
-            resolutionSlaVal.innerHTML = `<i class="ti ti-alert-circle" style="color:var(--td-red, #ef4444);"></i> Overdue (${formatDate(resolutionTarget)})`;
+            resolutionSlaVal.innerHTML = `<i class="ti ti-alert-circle" style="color:var(--td-red, #ef4444);"></i><span class="sla-val-txt">Overdue (${formatDateTime(resolutionTarget)})</span>`;
             if (resolutionBox) resolutionBox.className = 'v pending';
         } else if (resolutionTarget) {
-            resolutionSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> Due ${formatDate(resolutionTarget)}`;
+            resolutionSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i><span class="sla-val-txt">Due ${formatDateTime(resolutionTarget)}</span>`;
             if (resolutionBox) resolutionBox.className = 'v pending';
         } else {
-            resolutionSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i> In Progress`;
+            resolutionSlaVal.innerHTML = `<i class="ti ti-clock" style="color:var(--td-amber, #f59e0b);"></i><span class="sla-val-txt">In Progress</span>`;
             if (resolutionBox) resolutionBox.className = 'v pending';
         }
     }
@@ -2158,7 +2406,7 @@ function openTicketDetail(ticket, skipHash) {
 
     // Sidebar Info Card
     setText('sd-info-support-type', ticket.custom_support_type || ticket.support_type || '-');
-    setText('sd-info-query-type', ticket.custom_query_type || ticket.category || ticket.issue_type || '-');
+    setText('sd-info-query-type', ticket.custom_query_type || ticket.category || '-');
     setText('sd-info-contact-name', ticket.person_name || ticket.raised_by_details?.full_name || portalData?.customer_info?.customer_name || '-');
     setText('sd-info-contact-email', ticket.contact_email || portalData?.customer_info?.email || '-');
     setText('sd-info-assigned-team', ticket.assigned_team || ticket.working_agent_name || ticket.support_team || '-');
@@ -2182,6 +2430,9 @@ function openTicketDetail(ticket, skipHash) {
     }
 
     go('ticket-detail', null, true);
+    if (ticket && ticket.name) {
+        updateDocumentTitle('Ticket Details', ticket.subject || ('Ticket #' + ticket.name));
+    }
     if (!skipHash && ticket && ticket.name) {
         updateUrlPath('tickets/' + encodeURIComponent(ticket.name));
     }
@@ -2231,7 +2482,7 @@ function openTicketDetail(ticket, skipHash) {
                     }
 
                     setText('sd-info-support-type', d.custom_support_type || d.support_type || '-');
-                    setText('sd-info-query-type', d.custom_query_type || d.category || d.issue_type || '-');
+                    setText('sd-info-query-type', d.custom_query_type || d.category || '-');
                     setText('sd-info-contact-name', d.person_name || d.raised_by_details?.full_name || portalData?.customer_info?.customer_name || '-');
                     setText('sd-info-contact-email', d.contact_email || portalData?.customer_info?.email || '-');
                     setText('sd-info-assigned-team', d.assigned_team || d.working_agent_name || d.support_team || '-');
@@ -2302,19 +2553,19 @@ function renderSlaTiers(ticket) {
     }
     if (l1Meta) {
         const target = ticket.sla_t1 || ticket.response_by || ticket.sla_resolution_by;
-        l1Meta.textContent = 'Deadline: ' + (target ? formatDate(target) : 'N/A');
+        l1Meta.textContent = 'Deadline: ' + (target ? formatDateTime(target) : 'N/A');
     }
 
     if (l2Status) l2Status.textContent = 'Unassigned';
-    if (l2Meta) l2Meta.textContent = 'Deadline: ' + (ticket.sla_t2 ? formatDate(ticket.sla_t2) : 'N/A (Stopped)');
+    if (l2Meta) l2Meta.textContent = 'Deadline: ' + (ticket.sla_t2 ? formatDateTime(ticket.sla_t2) : 'N/A (Stopped)');
 
     if (l3Status) l3Status.textContent = 'Unassigned';
-    if (l3Meta) l3Meta.textContent = 'Deadline: ' + (ticket.sla_t3 ? formatDate(ticket.sla_t3) : 'N/A (Stopped)');
+    if (l3Meta) l3Meta.textContent = 'Deadline: ' + (ticket.sla_t3 ? formatDateTime(ticket.sla_t3) : 'N/A (Stopped)');
 
     const createdEl = document.getElementById('sd-sla-created-on');
     const updatedEl = document.getElementById('sd-sla-updated-on');
-    if (createdEl) createdEl.textContent = ticket.creation ? formatDate(ticket.creation) : '-';
-    if (updatedEl) updatedEl.textContent = ticket.modified ? formatDate(ticket.modified) : '-';
+    if (createdEl) createdEl.textContent = ticket.creation ? formatDateTime(ticket.creation) : '-';
+    if (updatedEl) updatedEl.textContent = ticket.modified ? formatDateTime(ticket.modified) : '-';
 }
 
 function renderStakeholderCards(ticket) {
@@ -2724,28 +2975,30 @@ function renderTicketContacts(contacts, d) {
         const isTpoc = c.tpoc || c.is_primary || c.custom_tpoc;
 
         const card = cel('div', {
-            style: 'padding:12px;background:var(--canvas,#f8fafc);border:1px solid var(--line,#e2e8f0);border-radius:10px;margin-bottom:10px;'
+            style: 'padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:12px;'
         }, [
-            cel('div', { style: 'display:flex;align-items:center;gap:10px;margin-bottom:6px;' }, [
-                cel('div', { style: 'width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;' }, [
-                    document.createTextNode(initial)
+            cel('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;' }, [
+                cel('div', { style: 'display:flex;align-items:center;gap:10px;' }, [
+                    cel('div', { style: 'width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#0284c7,#2563eb);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;' }, [
+                        document.createTextNode(initial)
+                    ]),
+                    cel('div', {}, [
+                        cel('div', { style: 'font-weight:700;font-size:13.5px;color:#0f172a;', textContent: displayName }),
+                        desig ? cel('div', { style: 'font-size:11.5px;color:#64748b;margin-top:1px;', textContent: desig }) : null
+                    ].filter(Boolean))
                 ]),
-                cel('div', {}, [
-                    cel('div', { style: 'font-weight:700;font-size:13px;color:var(--ink,#1e293b);', textContent: displayName }),
-                    desig ? cel('div', { style: 'font-size:11px;color:var(--ink-soft,#64748b);', textContent: desig }) : null
-                ].filter(Boolean))
-            ]),
-            email ? cel('div', { style: 'font-size:11.5px;color:var(--blue,#2563eb);word-break:break-all;margin-top:6px;display:flex;align-items:center;gap:6px;' }, [
-                cel('i', { class: 'ti ti-mail', style: 'color:var(--ink-soft);' }),
-                cel('span', { textContent: email })
-            ]) : null,
-            mobile ? cel('div', { style: 'font-size:11.5px;color:var(--ink,#1e293b);margin-top:4px;display:flex;align-items:center;gap:6px;' }, [
-                cel('i', { class: 'ti ti-phone', style: 'color:var(--ink-soft);' }),
-                cel('span', { textContent: mobile })
-            ]) : null,
-            isTpoc ? cel('div', { style: 'margin-top:6px;' }, [
-                cel('span', { class: 'tpoc-badge-green', style: 'font-size:10px;padding:2px 6px;', textContent: '✓ TPOC' })
-            ]) : null
+                isTpoc ? cel('span', { class: 'tpoc-badge-green', style: 'font-size:10.5px;padding:3px 8px;border-radius:6px;font-weight:700;', textContent: '✓ TPOC' }) : null
+            ].filter(Boolean)),
+            email || mobile ? cel('div', { style: 'border-top:1px dashed #e2e8f0;padding-top:8px;display:flex;flex-direction:column;gap:6px;' }, [
+                email ? cel('div', { style: 'font-size:12px;color:#0284c7;display:grid;grid-template-columns:18px 1fr;gap:6px;align-items:center;' }, [
+                    cel('i', { class: 'ti ti-mail', style: 'color:#64748b;font-size:14px;' }),
+                    cel('span', { style: 'word-break:break-all;font-weight:500;', textContent: email })
+                ]) : null,
+                mobile ? cel('div', { style: 'font-size:12px;color:#334155;display:grid;grid-template-columns:18px 1fr;gap:6px;align-items:center;' }, [
+                    cel('i', { class: 'ti ti-phone', style: 'color:#64748b;font-size:14px;' }),
+                    cel('span', { style: 'font-weight:500;', textContent: mobile })
+                ]) : null
+            ].filter(Boolean)) : null
         ].filter(Boolean));
 
         listEl.appendChild(card);
@@ -2766,25 +3019,45 @@ function renderTicketRenewals(renewals) {
 
     if (secEl) secEl.style.display = 'block';
 
-    list.forEach(ren => {
+    list.forEach((ren, index) => {
         const title = ren.item || ren.item_name || ren.product_name || 'Asset Item';
-        const renewalId = ren.renewal_id ? `${ren.renewal_id}` : '';
-        const endDate = ren.end_date ? `-${ren.end_date}` : '';
-        const qty = (ren.quantity || ren.total_quantity) ? `-${ren.quantity || ren.total_quantity}` : '';
+        const rows = [];
 
-        const metaText = [renewalId, qty, endDate].filter(Boolean).join(' ');
+        // Item Name Row
+        rows.push(cel('div', { style: 'display:flex;align-items:flex-start;margin-bottom:6px;font-size:12.5px;line-height:1.4;' }, [
+            cel('span', { style: 'color:var(--ink-soft,#64748b);font-weight:500;width:80px;flex-shrink:0;', textContent: 'Asset :' }),
+            cel('span', { style: 'font-weight:600;color:var(--ink,#1e293b);', textContent: title })
+        ]));
 
+        // ID Row
+        if (ren.renewal_id) {
+            rows.push(cel('div', { style: 'display:flex;align-items:center;margin-bottom:6px;font-size:12px;' }, [
+                cel('span', { style: 'color:var(--ink-soft,#64748b);font-weight:500;width:80px;flex-shrink:0;', textContent: 'ID :' }),
+                cel('span', { style: 'font-weight:600;color:var(--ink,#1e293b);', textContent: ren.renewal_id })
+            ]));
+        }
+
+        // Qty Row
+        const qtyVal = ren.quantity || ren.total_quantity;
+        if (qtyVal) {
+            rows.push(cel('div', { style: 'display:flex;align-items:center;margin-bottom:6px;font-size:12px;' }, [
+                cel('span', { style: 'color:var(--ink-soft,#64748b);font-weight:500;width:80px;flex-shrink:0;', textContent: 'Qty :' }),
+                cel('span', { style: 'font-weight:600;color:var(--ink,#1e293b);', textContent: qtyVal })
+            ]));
+        }
+
+        // End Date Row
+        if (ren.end_date) {
+            rows.push(cel('div', { style: 'display:flex;align-items:center;margin-bottom:6px;font-size:12px;' }, [
+                cel('span', { style: 'color:var(--ink-soft,#64748b);font-weight:500;width:80px;flex-shrink:0;', textContent: 'End Date :' }),
+                cel('span', { style: 'font-weight:600;color:var(--ink,#1e293b);', textContent: formatDate(ren.end_date) })
+            ]));
+        }
+
+        const isLast = index === list.length - 1;
         const card = cel('div', {
-            style: 'padding:12px;background:var(--canvas,#f8fafc);border:1px solid var(--line,#e2e8f0);border-radius:10px;margin-bottom:10px;'
-        }, [
-            cel('div', { style: 'display:flex;align-items:center;gap:10px;margin-bottom:4px;' }, [
-                cel('div', { style: 'width:32px;height:32px;border-radius:8px;background:rgba(37,99,235,0.1);color:#2563eb;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px;' }, [
-                    cel('i', { class: 'ti ti-box' })
-                ]),
-                cel('div', { style: 'font-weight:700;font-size:13px;color:var(--ink,#1e293b);', textContent: title })
-            ]),
-            metaText ? cel('div', { style: 'font-size:11.5px;color:var(--ink-soft,#64748b);margin-left:42px;', textContent: metaText }) : null
-        ].filter(Boolean));
+            style: isLast ? 'margin-bottom:6px;' : 'margin-bottom:14px;border-bottom:1px dashed var(--line,#e2e8f0);padding-bottom:10px;'
+        }, rows);
 
         listEl.appendChild(card);
     });
@@ -3023,8 +3296,9 @@ function renderTicketActivity(activity) {
                 const rawType = (act.type || act.title || 'comment').toLowerCase();
                 const descText = act.description || act.content || '';
 
-                const hasTemplateHtml = typeof descText === 'string' && (descText.includes('<table') || descText.includes('<div') || descText.includes('<html>') || descText.includes('<!DOCTYPE') || descText.includes('<style'));
-                const isEmailEvent = rawType.includes('communication') || rawType.includes('notification') || rawType.includes('email') || (act.recipients && act.recipients !== 'N/A') || act.to || (hasTemplateHtml && descText.length > 250);
+                const isHtmlTemplate = typeof descText === 'string' && (descText.includes('<table') || descText.includes('<html') || descText.includes('<!DOCTYPE') || descText.includes('<body') || (descText.includes('<style') && descText.length > 200));
+                const isSentEmail = (act.sent_or_received === 'Sent' && act.recipients && act.recipients !== 'N/A') || (rawType === 'email' && act.recipients) || (rawType === 'automated message') || isHtmlTemplate;
+                const isCustomerMessage = !isHtmlTemplate && (rawType.includes('customer message') || rawType === 'communication' || rawType.includes('message') || rawType.includes('description'));
 
                 let iconClass = 'ti ti-message-circle';
                 let rowClass = 'comment';
@@ -3046,19 +3320,24 @@ function renderTicketActivity(activity) {
                     rowClass = 'status';
                     categoryName = 'Status Change';
                     categoryBadgeClass = 'status';
-                } else if (isEmailEvent) {
+                } else if (isSentEmail || isHtmlTemplate) {
                     iconClass = 'ti ti-mail';
                     rowClass = 'email';
                     categoryName = 'Email Notification';
                     categoryBadgeClass = 'email';
+                } else if (isCustomerMessage) {
+                    iconClass = 'ti ti-file-text';
+                    rowClass = 'comment';
+                    categoryName = 'Ticket Description';
+                    categoryBadgeClass = 'comment';
                 }
 
-                const byName = act.by || act.sender_full_name || act.sender || 'System';
+                const byName = act.by || act.sender_full_name || act.sender || 'Customer';
                 const stamp = act.timestamp || act.creation || '';
                 const relTime = formatRelativeTime(stamp);
 
                 let contentHtml = '';
-                if (isEmailEvent) {
+                if (isSentEmail || isHtmlTemplate) {
                     const tmplId = `act-tmpl-${idx}-${Math.random().toString(36).substring(7)}`;
                     const toVal = act.recipients || act.to || '';
                     const ccVal = act.cc || '';
@@ -3068,15 +3347,22 @@ function renderTicketActivity(activity) {
                     let subjVal = rawSubj ? rawSubj.replace(/Ticket\s*No\s*[:|-]?\s*[A-Z0-9_-]+/gi, '').trim().replace(/^[:\s-]+/, '').trim() : '';
                     let subjectLine = subjVal ? `<div style="font-size:13px;font-weight:700;color:var(--td-text,#161b2c);margin-bottom:4px;">${safeEscape(subjVal)}</div>` : '';
 
-                    contentHtml = `
-                        <div style="font-size:12px;color:var(--td-muted,#6b7290);margin-top:6px;background:var(--td-surface-2,#f4f6fb);padding:8px 12px;border-radius:8px;border:1px solid var(--td-line,#e2e6f0);line-height:1.5;">
-                            ${subjectLine}
-                            <div style="display:flex;flex-wrap:wrap;gap:12px;color:var(--td-muted,#6b7290);">
-                                ${toVal ? `<div><b>To:</b> ${safeEscape(toVal)}</div>` : ''}
-                                ${ccVal ? `<div><b>Cc:</b> ${safeEscape(ccVal)}</div>` : ''}
-                                ${bccVal ? `<div><b>Bcc:</b> ${safeEscape(bccVal)}</div>` : ''}
+                    let metaHtml = '';
+                    if (toVal || ccVal || bccVal || subjectLine) {
+                        metaHtml = `
+                            <div style="font-size:12px;color:var(--td-muted,#6b7290);margin-top:6px;background:var(--td-surface-2,#f4f6fb);padding:8px 12px;border-radius:8px;border:1px solid var(--td-line,#e2e6f0);line-height:1.5;">
+                                ${subjectLine}
+                                <div style="display:flex;flex-wrap:wrap;gap:12px;color:var(--td-muted,#6b7290);">
+                                    ${toVal ? `<div><b>To:</b> ${safeEscape(toVal)}</div>` : ''}
+                                    ${ccVal ? `<div><b>Cc:</b> ${safeEscape(ccVal)}</div>` : ''}
+                                    ${bccVal ? `<div><b>Bcc:</b> ${safeEscape(bccVal)}</div>` : ''}
+                                </div>
                             </div>
-                        </div>
+                        `;
+                    }
+
+                    contentHtml = `
+                        ${metaHtml}
                         <div class="td-email-template-wrapper" id="${tmplId}">
                             <div class="td-email-template-inner">
                                 ${descText}
@@ -3439,6 +3725,7 @@ function renderContactDetails(contacts, fallbackName, fallbackEmail) {
 // New Ticket Modal Handlers
 let cpUploadedFiles = [];
 let cpSelectedDept = "";
+let cpProductAssocType = "";
 let cpSelectedSub = null;
 let cpActiveRenewals = [];
 let cpSelectedQuery = "";
@@ -3447,22 +3734,23 @@ let cpSelectedContacts = [];
 let cpActiveQueryTypes = null;
 
 const CP_DEPARTMENTS = [
-    { id: "Technical", name: "Technical", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>' },
-    { id: "Accounts Team & Billing", name: "Accounts & Billing", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' },
-    { id: "Sales", name: "Sales", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
-    { id: "Demo", name: "Demo", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
-    { id: "Licence Activation", name: "Licence Activation", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' },
-    { id: "Other", name: "Other", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' }
+    { id: "Technical", name: "Technical", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>', color: "#2563eb", bg: "rgba(37, 99, 235, 0.1)" },
+    { id: "Accounts Team & Billing", name: "Accounts & Billing", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>', color: "#0f766e", bg: "rgba(15, 118, 110, 0.1)" },
+    { id: "Sales", name: "Sales", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>', color: "#8b5cf6", bg: "rgba(139, 92, 246, 0.1)" },
+    { id: "Demo", name: "Demo", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>', color: "#d97706", bg: "rgba(217, 119, 6, 0.1)" },
+    { id: "Licence Activation", name: "Licence Activation", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>', color: "#ea580c", bg: "rgba(234, 88, 12, 0.1)" },
+    { id: "Other", name: "Other", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>', color: "#64748b", bg: "rgba(100, 116, 139, 0.1)" }
 ];
 
 function getCategoryOptions() {
     if (cpActiveQueryTypes && cpActiveQueryTypes.length > 0) {
         return cpActiveQueryTypes;
     }
-    if (portalData && portalData.support && portalData.support.issue_types && portalData.support.issue_types.length > 0) {
-        return portalData.support.issue_types.map(t => ({
-            id: t,
-            name: t,
+    const genericTypes = (portalData && portalData.support && (portalData.support.query_types || portalData.support.custom_query_types || portalData.support.issue_types)) || [];
+    if (genericTypes && genericTypes.length > 0) {
+        return genericTypes.map(t => ({
+            id: typeof t === 'string' ? t : (t.name || t.id),
+            name: typeof t === 'string' ? t : (t.name || t.id),
             icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
         }));
     }
@@ -3512,8 +3800,7 @@ function initCustomerPortalWizard() {
     }
 
     if (defaultContact) {
-        const isDefaultTpoc = Boolean(defaultContact.tpoc || defaultContact.custom_tpoc);
-        defaultContact = { ...defaultContact, tpoc: isDefaultTpoc ? 1 : 0, custom_tpoc: isDefaultTpoc ? 1 : 0 };
+        defaultContact = { ...defaultContact, tpoc: 1, custom_tpoc: 1 };
     } else {
         defaultContact = {
             first_name: userEmail ? userEmail.split('@')[0] : (info.user_fullname || "Customer"),
@@ -3529,7 +3816,8 @@ function initCustomerPortalWizard() {
 
     cpSelectedContacts = [defaultContact];
 
-    cpSelectedDept = "Technical";
+    cpSelectedDept = "";
+    cpProductAssocType = "";
     cpSelectedSub = null;
     cpActiveRenewals = [];
     cpSelectedQuery = "";
@@ -3539,6 +3827,7 @@ function initCustomerPortalWizard() {
 
     cpRenderSelectedContact();
     cpRenderSelectedDept();
+    cpRenderProductAssoc();
     cpRenderSelectedSub();
     cpRenderSelectedQuery();
     cpSelectPriority('Medium');
@@ -3547,7 +3836,8 @@ function initCustomerPortalWizard() {
 
 function cpResetTicketWizard() {
     cpUploadedFiles = [];
-    cpSelectedDept = "Technical";
+    cpSelectedDept = "";
+    cpProductAssocType = "";
     cpSelectedSub = null;
     cpActiveRenewals = [];
     cpSelectedQuery = "";
@@ -4261,7 +4551,9 @@ function cpRenderContactsModalList() {
         const nameStr = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.name || c.email_id;
         const isSel = cpSelectedContacts.some(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
         const selObj = cpSelectedContacts.find(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
-        const isTpoc = selObj ? Boolean(selObj.tpoc || selObj.is_primary) : Boolean(c.tpoc || c.custom_tpoc);
+
+        // Unselected contacts are unchecked (false) initially unless user manually checks
+        const isTpoc = isSel ? Boolean(selObj && (selObj.tpoc === 1 || selObj.tpoc === true)) : Boolean(c._manual_tpoc === 1);
 
         const tpocWrap = cel('div', {
             style: 'display:flex;align-items:center;gap:4px;margin-right:12px;',
@@ -4273,15 +4565,16 @@ function cpRenderContactsModalList() {
                 style: 'width:14px;height:14px;cursor:pointer;accent-color:var(--indigo,#4f46e5);',
                 checked: Boolean(isTpoc),
                 onchange: (e) => {
-                    const val = e.target.checked ? 1 : 0;
+                    const isChecked = e.target.checked;
+                    const val = isChecked ? 1 : 0;
+                    c._manual_tpoc = val;
                     c.tpoc = val;
                     c.custom_tpoc = val;
                     if (selObj) {
                         selObj.tpoc = val;
-                        selObj.is_primary = val;
                         selObj.custom_tpoc = val;
+                        cpRenderSelectedContact();
                     }
-                    cpRenderSelectedContact();
                 }
             }),
             cel('label', {
@@ -4324,20 +4617,18 @@ function cpToggleContact(c) {
     const idx = cpSelectedContacts.findIndex(sc => sc.name === c.name || (sc.email_id && sc.email_id === c.email_id));
     if (idx >= 0) {
         cpSelectedContacts.splice(idx, 1);
+        c._manual_tpoc = 0;
     } else {
         const tpocChk = document.getElementById(`cp-existing-tpoc-${c.name || c.email_id}`);
-        const hasTpoc = cpSelectedContacts.some(sc => sc.tpoc);
-        const isTpoc = tpocChk ? (tpocChk.checked ? 1 : (!hasTpoc ? 1 : 0)) : (c.tpoc || c.custom_tpoc || !hasTpoc ? 1 : 0);
-        cpSelectedContacts.push({ ...c, tpoc: isTpoc });
+        const isTpoc = (tpocChk && tpocChk.checked) || c._manual_tpoc === 1 ? 1 : 0;
+        cpSelectedContacts.push({ ...c, tpoc: isTpoc, custom_tpoc: isTpoc });
     }
 
     if (typeof cpContactModalMode !== 'undefined' && cpContactModalMode === 'detail' && window.currentPortalTicketName) {
         if (typeof cpSaveTicketDetailContacts === 'function') cpSaveTicketDetailContacts();
-    } else {
-        cpCloseContactModal();
-        cpRenderSelectedContact();
-        cpRenderContactsModalList();
     }
+    cpRenderSelectedContact();
+    cpRenderContactsModalList();
 }
 
 function cpSaveNewContact() {
@@ -4399,10 +4690,14 @@ function cpRenderSelectedDept() {
     card.className = "selected-model-card";
     card.style.borderStyle = "solid";
 
-    const d = CP_DEPARTMENTS.find(dept => dept.id === cpSelectedDept) || { name: cpSelectedDept, icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v14M21 7v14M6 3h12v4H6z"/></svg>' };
+    const d = CP_DEPARTMENTS.find(dept => dept.id === cpSelectedDept) || { name: cpSelectedDept, icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v14M21 7v14M6 3h12v4H6z"/></svg>', color: "var(--indigo, #4f46e5)", bg: "rgba(79, 70, 229, 0.1)" };
 
     const leftWrap = cel('div', { class: 'smc-left' }, [
-        cel('div', { class: 'smc-ico', innerHTML: d.icon }),
+        cel('div', {
+            class: 'smc-ico',
+            style: `background: ${d.bg}; color: ${d.color};`,
+            innerHTML: d.icon
+        }),
         cel('div', { class: 'smc-info' }, [
             cel('div', { class: 'smc-title', textContent: d.name })
         ])
@@ -4439,7 +4734,11 @@ function cpRenderDeptModalGrid() {
             class: 'cp-dept-tile model-tile ' + (isSel ? 'selected' : ''),
             onclick: () => cpSelectDept(d.id)
         }, [
-            cel('div', { class: 'model-tile-ico', innerHTML: d.icon }),
+            cel('div', {
+                class: 'model-tile-ico',
+                style: `background: ${d.bg}; color: ${d.color};`,
+                innerHTML: d.icon
+            }),
             cel('div', { class: 'cp-dept-info' }, [
                 cel('div', { class: 'model-tile-title', textContent: d.name })
             ]),
@@ -4451,31 +4750,63 @@ function cpRenderDeptModalGrid() {
 
 function cpSelectDept(deptId) {
     cpSelectedDept = deptId;
+    if (cpSelectedDept !== 'Technical') {
+        cpProductAssocType = "";
+        const inp = document.getElementById('nt-product-association-type');
+        if (inp) inp.value = "";
+    }
     cpRenderSelectedDept();
+    cpRenderProductAssoc();
     cpCloseDeptModal();
+}
+
+/* ─── PRODUCT ASSOCIATION TYPE (EXISTING ASSET VS NEW PRODUCT) ─── */
+function cpSelectProductAssoc(type) {
+    cpProductAssocType = type;
+    const inp = document.getElementById('nt-product-association-type');
+    if (inp) inp.value = type;
+    cpRenderProductAssoc();
+}
+
+function cpRenderProductAssoc() {
+    const grp = document.getElementById('cp-product-assoc-grp');
+    if (grp) {
+        grp.style.display = (cpSelectedDept === 'Technical') ? 'block' : 'none';
+    }
+    const cardExisting = document.getElementById('cp-assoc-existing');
+    const cardNew = document.getElementById('cp-assoc-new');
+    if (cardExisting) {
+        if (cpProductAssocType === 'Existing Asset') {
+            cardExisting.classList.add('selected');
+        } else {
+            cardExisting.classList.remove('selected');
+        }
+    }
+    if (cardNew) {
+        if (cpProductAssocType === 'New Product') {
+            cardNew.classList.add('selected');
+        } else {
+            cardNew.classList.remove('selected');
+        }
+    }
+    cpUpdateDeptVisibility();
+    if (typeof cpUpdateStepperVisibility === 'function') {
+        cpUpdateStepperVisibility();
+    }
 }
 
 function cpUpdateDeptVisibility() {
     const isTech = cpSelectedDept === 'Technical';
+    const isExisting = isTech && cpProductAssocType === 'Existing Asset';
+
+    const assocGrp = document.getElementById('cp-product-assoc-grp');
+    if (assocGrp) assocGrp.style.display = isTech ? 'block' : 'none';
 
     const subGrp = document.getElementById('cp-sub-grp');
-    if (subGrp) subGrp.style.display = isTech ? 'block' : 'none';
+    if (subGrp) subGrp.style.display = isExisting ? 'block' : 'none';
 
-    if (!isTech) {
+    if (!isExisting) {
         cpSelectedSub = null;
-        if (portalData && portalData.support && portalData.support.issue_types && portalData.support.issue_types.length) {
-            cpActiveQueryTypes = portalData.support.issue_types.map(t => ({
-                id: typeof t === 'string' ? t : (t.name || t.id),
-                name: typeof t === 'string' ? t : (t.name || t.id),
-                icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
-            }));
-        } else {
-            cpActiveQueryTypes = null;
-        }
-        cpSelectedQuery = "";
-        cpRenderSelectedSub();
-        cpRenderSelectedQuery();
-    } else {
         cpActiveQueryTypes = null;
         cpSelectedQuery = "";
         cpRenderSelectedSub();
@@ -4784,22 +5115,63 @@ function cpSelectPriority(prio) {
     });
 }
 
-/* ─── WIZARD STEPPER NAVIGATION ─── */
-function cpGoToStep(stepNum) {
+/* ─── WIZARD STEPPER NAVIGATION & DYNAMIC STEP COUNT ─── */
+function getActiveStepList() {
+    const isExistingAsset = (cpSelectedDept === 'Technical' && cpProductAssocType === 'Existing Asset');
+    return isExistingAsset ? [1, 2, 3, 4, 5, 6] : [1, 2, 5, 6];
+}
+
+function cpUpdateStepperVisibility(targetStep = 1) {
+    const activeSteps = getActiveStepList();
+
     for (let i = 1; i <= 6; i++) {
-        const indicator = document.getElementById(`cp-step-indicator-${i}`);
-        const panel = document.getElementById(`cp-step-panel-${i}`);
-        if (indicator) {
-            if (i < stepNum) {
-                indicator.className = 'cp-step-item completed';
-            } else if (i === stepNum) {
-                indicator.className = 'cp-step-item active';
+        const ind = document.getElementById(`cp-step-indicator-${i}`);
+        const div = ind?.nextElementSibling;
+        const numEl = ind ? ind.querySelector('.cp-step-num') : null;
+
+        const isStepActiveInFlow = activeSteps.includes(i);
+
+        if (ind) {
+            if (!isStepActiveInFlow) {
+                ind.style.display = 'none';
             } else {
-                indicator.className = 'cp-step-item';
+                ind.style.display = '';
+                // Dynamically assign 1-based index (1..4 for 4-step mode, 1..6 for 6-step mode)
+                const stepPos = activeSteps.indexOf(i) + 1;
+                if (numEl) numEl.textContent = String(stepPos);
+
+                const currentActivePos = activeSteps.indexOf(targetStep);
+                const thisPos = activeSteps.indexOf(i);
+
+                if (thisPos < currentActivePos) {
+                    ind.className = 'cp-step-item completed';
+                } else if (thisPos === currentActivePos) {
+                    ind.className = 'cp-step-item active';
+                } else {
+                    ind.className = 'cp-step-item';
+                }
             }
         }
+
+        if (div && div.classList.contains('cp-step-divider')) {
+            const thisPos = activeSteps.indexOf(i);
+            const isLastActive = (thisPos === activeSteps.length - 1);
+            div.style.display = (isStepActiveInFlow && !isLastActive) ? '' : 'none';
+        }
+    }
+}
+
+function cpGoToStep(stepNum) {
+    const activeSteps = getActiveStepList();
+    if (!activeSteps.includes(stepNum)) {
+        return;
+    }
+    cpUpdateStepperVisibility(stepNum);
+
+    for (let i = 1; i <= 6; i++) {
+        const panel = document.getElementById(`cp-step-panel-${i}`);
         if (panel) {
-            panel.className = i === stepNum ? 'cp-step-panel active' : 'cp-step-panel';
+            panel.className = (i === stepNum) ? 'cp-step-panel active' : 'cp-step-panel';
         }
     }
 }
@@ -4812,7 +5184,7 @@ function cpGoNextStep(currStep) {
             return;
         }
     } else if (currStep === 2) {
-        // Step 2: Subject & Department
+        // Step 2: Subject & Department & Product Association Type
         const subject = document.getElementById('nt-subject')?.value.trim();
         if (!subject) {
             alert('Please enter a Subject for your ticket.');
@@ -4823,14 +5195,25 @@ function cpGoNextStep(currStep) {
             alert('Please select a Department.');
             return;
         }
-    } else if (currStep === 3) {
-        // Step 3: Active Subscription (Optional / Selectable)
-        // Can proceed directly
-    } else if (currStep === 4) {
-        // Step 4: Query Type (Priority hidden / defaulted)
-        if (!cpSelectedQuery) {
-            alert('Please select a Query Type.');
+        if (cpSelectedDept === 'Technical' && !cpProductAssocType) {
+            alert('Please select a Product Association Type (Existing Asset or New Product).');
             return;
+        }
+    } else if (currStep === 3) {
+        // Step 3: Active Subscription (Mandatory for Existing Asset)
+        if (cpSelectedDept === 'Technical' && cpProductAssocType === 'Existing Asset') {
+            if (!cpSelectedSub) {
+                alert('Please select an Active Subscription / Asset for your existing asset.');
+                return;
+            }
+        }
+    } else if (currStep === 4) {
+        // Step 4: Query Type (Mandatory for Existing Asset)
+        if (cpSelectedDept === 'Technical' && cpProductAssocType === 'Existing Asset') {
+            if (!cpSelectedQuery) {
+                alert('Please select a Query Type / SLA Task.');
+                return;
+            }
         }
     } else if (currStep === 5) {
         // Step 5: Description & Attachments
@@ -4842,11 +5225,20 @@ function cpGoNextStep(currStep) {
         }
         cpUpdateSummaryBreakdown();
     }
-    cpGoToStep(currStep + 1);
+
+    const activeSteps = getActiveStepList();
+    const currentIndex = activeSteps.indexOf(currStep);
+    if (currentIndex >= 0 && currentIndex < activeSteps.length - 1) {
+        cpGoToStep(activeSteps[currentIndex + 1]);
+    }
 }
 
 function cpGoPrevStep(currStep) {
-    cpGoToStep(currStep - 1);
+    const activeSteps = getActiveStepList();
+    const currentIndex = activeSteps.indexOf(currStep);
+    if (currentIndex > 0) {
+        cpGoToStep(activeSteps[currentIndex - 1]);
+    }
 }
 
 function cpUpdateSummaryBreakdown() {
@@ -4857,10 +5249,18 @@ function cpUpdateSummaryBreakdown() {
     if (sumCust) sumCust.textContent = info.customer_name || '-';
 
     const sumSales = document.getElementById('cp-sum-sales-person');
-    if (sumSales) sumSales.textContent = info.sales_person || '';
+    const sumSalesRow = document.getElementById('cp-sum-sales-row');
+    if (sumSales) sumSales.textContent = info.sales_person || '-';
+    if (sumSalesRow) sumSalesRow.style.display = info.sales_person ? 'flex' : 'none';
 
     const sumSubj = document.getElementById('cp-sum-subject');
-    if (sumSubj) sumSubj.textContent = document.getElementById('nt-subject')?.value || '-';
+    if (sumSubj) sumSubj.textContent = document.getElementById('nt-subject')?.value.trim() || '-';
+
+    const sumDesc = document.getElementById('cp-sum-description');
+    if (sumDesc) {
+        const descVal = document.getElementById('nt-description')?.value.trim();
+        sumDesc.textContent = descVal || 'No detailed description provided.';
+    }
 
     let contactStr = '-';
     if (cpSelectedContacts.length > 0) {
@@ -4878,17 +5278,38 @@ function cpUpdateSummaryBreakdown() {
     const sumDept = document.getElementById('cp-sum-dept');
     if (sumDept) sumDept.textContent = cpSelectedDept || '-';
 
+    const sumAssoc = document.getElementById('cp-sum-assoc');
+    const sumAssocRow = document.getElementById('cp-sum-assoc-row');
+    if (sumAssoc) sumAssoc.textContent = cpProductAssocType || '-';
+    if (sumAssocRow) sumAssocRow.style.display = (cpSelectedDept === 'Technical') ? 'flex' : 'none';
+
     const sumSub = document.getElementById('cp-sum-sub');
+    const sumSubRow = document.getElementById('cp-sum-sub-row');
     if (sumSub) sumSub.textContent = cpSelectedSub ? (cpSelectedSub.product_name || cpSelectedSub.name) : 'None';
+    if (sumSubRow) sumSubRow.style.display = (cpSelectedDept === 'Technical' && cpProductAssocType === 'Existing Asset') ? 'flex' : 'none';
 
     const sumCat = document.getElementById('cp-sum-category');
+    const sumCatRow = document.getElementById('cp-sum-query-row');
     if (sumCat) sumCat.textContent = cpSelectedQuery || '-';
+    if (sumCatRow) sumCatRow.style.display = (cpSelectedDept === 'Technical' && cpProductAssocType === 'Existing Asset') ? 'flex' : 'none';
 
-    const sumPrio = document.getElementById('cp-sum-priority');
-    if (sumPrio) sumPrio.textContent = cpSelectedPriority || 'Medium';
+    const sumFilesCount = document.getElementById('cp-sum-files-count');
+    if (sumFilesCount) sumFilesCount.textContent = String(cpUploadedFiles.length);
 
-    const sumFiles = document.getElementById('cp-sum-files');
-    if (sumFiles) sumFiles.textContent = `${cpUploadedFiles.length} file(s) attached`;
+    const sumFilesWrap = document.getElementById('cp-sum-attachments-list');
+    if (sumFilesWrap) {
+        sumFilesWrap.replaceChildren();
+        if (cpUploadedFiles.length === 0) {
+            sumFilesWrap.appendChild(cel('div', { style: 'font-size:12.5px;color:var(--ink-soft);font-style:italic;', textContent: 'No files attached' }));
+        } else {
+            cpUploadedFiles.forEach(f => {
+                sumFilesWrap.appendChild(cel('div', { class: 'cp-rf-item' }, [
+                    cel('i', { class: 'ti ti-paperclip' }),
+                    document.createTextNode(f.file_name || 'Attached File')
+                ]));
+            });
+        }
+    }
 }
 
 /* ─── FILE UPLOAD HANDLERS ─── */
@@ -4997,6 +5418,7 @@ function submitTicket() {
             priority: cpSelectedPriority,
             category: cpSelectedQuery,
             department: cpSelectedDept,
+            product_association_type: cpProductAssocType,
             active_subscription: activeSubStr,
             active_renewals: JSON.stringify(cpActiveRenewals),
             contact_person: contactPersonStr,
@@ -5059,6 +5481,23 @@ function submitNewTicket() {
     submitTicket();
 }
 
+// Account Tabs Switcher
+function acctTab(tabEl, panelId) {
+    document.querySelectorAll('.pf-acct-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.pf-acct-panel').forEach(p => {
+        p.classList.remove('active');
+        p.style.display = 'none';
+    });
+    if (tabEl) {
+        tabEl.classList.add('active');
+    }
+    const panel = document.getElementById(panelId);
+    if (panel) {
+        panel.classList.add('active');
+        panel.style.display = 'block';
+    }
+}
+
 // Account & Contacts Render
 function renderAccount() {
     if (!portalData) return;
@@ -5094,6 +5533,20 @@ function renderAccount() {
     renderSupportTeamCards();
     renderAccountAddresses();
     renderAccountContacts();
+
+    // Update Tab Badges
+    const addrBadge = document.getElementById('acct-addr-tab-count');
+    if (addrBadge) {
+        const addrs = portalData.addresses || [];
+        const addrCount = addrs.length || (info.billing_address ? 1 : 0);
+        addrBadge.textContent = addrCount;
+    }
+
+    const contactBadge = document.getElementById('acct-contact-tab-count');
+    if (contactBadge) {
+        const contacts = portalData.contacts || [];
+        contactBadge.textContent = contacts.length;
+    }
 }
 
 function renderSupportTeamCards() {

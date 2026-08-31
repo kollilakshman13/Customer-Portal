@@ -1072,10 +1072,14 @@
                         </div>
 
                         <div class="cp-wiz-footer">
-                            <div></div>
-                            <button class="pf-btn primary" onclick="cpGoNextStep(1)">
-                                Continue to Classification <i class="ti ti-arrow-right"></i>
+                            <button type="button" class="pf-btn" onclick="go('tickets')">
+                                <i class="ti ti-x"></i> Cancel
                             </button>
+                            <div style="display:flex;gap:10px;align-items:center;">
+                                <button class="pf-btn primary" onclick="cpGoNextStep(1)">
+                                    Next <i class="ti ti-arrow-right"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1149,12 +1153,17 @@
                         </div>
 
                         <div class="cp-wiz-footer">
-                            <button class="pf-btn" onclick="cpGoPrevStep(2)">
-                                <i class="ti ti-arrow-left"></i> Back
+                            <button type="button" class="pf-btn" onclick="go('tickets')">
+                                <i class="ti ti-x"></i> Cancel
                             </button>
-                            <button class="pf-btn primary" onclick="cpGoNextStep(2)">
-                                Continue to Details & Files <i class="ti ti-arrow-right"></i>
-                            </button>
+                            <div style="display:flex;gap:10px;align-items:center;">
+                                <button class="pf-btn" onclick="cpGoPrevStep(2)">
+                                    <i class="ti ti-arrow-left"></i> Back
+                                </button>
+                                <button class="pf-btn primary" onclick="cpGoNextStep(2)">
+                                    Next <i class="ti ti-arrow-right"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1191,12 +1200,17 @@
                         </div>
 
                         <div class="cp-wiz-footer">
-                            <button class="pf-btn" onclick="cpGoPrevStep(3)">
-                                <i class="ti ti-arrow-left"></i> Back
+                            <button type="button" class="pf-btn" onclick="go('tickets')">
+                                <i class="ti ti-x"></i> Cancel
                             </button>
-                            <button class="pf-btn primary" onclick="cpGoNextStep(3)">
-                                Continue to Review & Submit <i class="ti ti-arrow-right"></i>
-                            </button>
+                            <div style="display:flex;gap:10px;align-items:center;">
+                                <button class="pf-btn" onclick="cpGoPrevStep(3)">
+                                    <i class="ti ti-arrow-left"></i> Back
+                                </button>
+                                <button class="pf-btn primary" onclick="cpGoNextStep(3)">
+                                    Next <i class="ti ti-arrow-right"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1237,12 +1251,17 @@
                         </div>
 
                         <div class="cp-wiz-footer">
-                            <button class="pf-btn" onclick="cpGoPrevStep(4)">
-                                <i class="ti ti-arrow-left"></i> Back to Details
+                            <button type="button" class="pf-btn" onclick="go('tickets')">
+                                <i class="ti ti-x"></i> Cancel
                             </button>
-                            <button class="pf-btn primary" id="cp-submit-btn" onclick="submitTicket()">
-                                <i class="ti ti-send"></i> Submit Ticket Now
-                            </button>
+                            <div style="display:flex;gap:10px;align-items:center;">
+                                <button class="pf-btn" onclick="cpGoPrevStep(4)">
+                                    <i class="ti ti-arrow-left"></i> Back
+                                </button>
+                                <button class="pf-btn primary" id="cp-submit-btn" onclick="submitTicket()">
+                                    <i class="ti ti-send"></i> Submit Ticket Now
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

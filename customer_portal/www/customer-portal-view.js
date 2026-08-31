@@ -241,6 +241,23 @@ function pfGo(name, el, skipHash) {
     if (!skipHash) {
         updateUrlPath(mainTabName);
     }
+
+    const titleMap = {
+        overview: 'Overview',
+        renewals: 'Renewals',
+        'renewal-detail': 'Renewal Details',
+        invoices: 'Invoices',
+        'invoice-detail': 'Invoice Details',
+        orders: 'Orders',
+        'order-detail': 'Order Details',
+        support: 'Support Tickets',
+        'support-detail': 'Ticket Details',
+        'support-new': 'Raise Ticket',
+        contacts: 'Account & Contacts',
+        'contact-detail': 'Contact Details'
+    };
+    const tabTitle = titleMap[name] || 'Customer Portal';
+    document.title = `${tabTitle} - 64 NSPL`;
 }
 
 function pfGoByName(name, skipHash) {
@@ -332,6 +349,8 @@ function cel(tag, attrs = {}, children = []) {
     for (const [k, v] of Object.entries(attrs)) {
         if (k === 'textContent' || k === 'innerText') {
             el.textContent = v;
+        } else if (k === 'innerHTML') {
+            el.innerHTML = v;
         } else if (k === 'checked' || k === 'disabled' || k === 'selected' || k === 'readOnly') {
             el[k] = Boolean(v);
         } else if (k.startsWith('on') && typeof v === 'function') {
@@ -1253,7 +1272,7 @@ function openTicketDetail(ticket, skipHash) {
 
     const categoryPill = document.getElementById('sd-category-pill');
     if (categoryPill) {
-        const catVal = ticket.custom_query_type || ticket.category || ticket.issue_type;
+        const catVal = ticket.custom_query_type || ticket.category || '';
         if (catVal && String(catVal).trim()) {
             categoryPill.textContent = String(catVal).trim();
             categoryPill.style.display = 'inline-flex';
@@ -1342,7 +1361,7 @@ function openTicketDetail(ticket, skipHash) {
                         priorityPill.style.display = 'inline-flex';
                     }
                     if (categoryPill) {
-                        const catVal = d.custom_query_type || d.category || d.issue_type;
+                        const catVal = d.custom_query_type || d.category || '';
                         if (catVal && String(catVal).trim()) {
                             categoryPill.textContent = String(catVal).trim();
                             categoryPill.style.display = 'inline-flex';
@@ -1422,7 +1441,7 @@ function renderSlaTiers(ticket) {
 
     if (resSlaDateEl) {
         if (slaResolutionBy) {
-            resSlaDateEl.textContent = formatDate(slaResolutionBy);
+            resSlaDateEl.textContent = formatDateTime(slaResolutionBy);
 
             const sla = calculatePortalSla(slaResolutionBy, ticket.creation, isResolvedOrClosed, ticket.agreement_status);
             if (sla && resSlaStatusEl) {
@@ -2148,16 +2167,19 @@ function renderTicketRenewals(renewals) {
     renewals.forEach(ren => {
         const title = ren.item || ren.item_name || ren.product_name || ren.renewal_id || 'Renewal Item';
         const subParts = [];
-        if (ren.renewal_id) subParts.push(ren.renewal_id);
+        if (ren.renewal_id) subParts.push(`ID: ${ren.renewal_id}`);
         if (ren.quantity) subParts.push(`Qty: ${ren.quantity}`);
-        if (ren.end_date) subParts.push(`Ends ${formatDate(ren.end_date)}`);
+        if (ren.end_date) subParts.push(`End Date: ${formatDate(ren.end_date)}`);
 
         const item = cel('div', { class: 'pf-asset-card' }, [
             cel('div', { class: 'pf-asset-icon' }, [
                 cel('i', { class: 'ti ti-device-desktop' })
             ]),
             cel('div', { style: 'flex:1;min-width:0;' }, [
-                cel('div', { class: 'pf-asset-title', textContent: title }),
+                cel('div', { class: 'pf-asset-title' }, [
+                    cel('span', { style: 'color:var(--ink-soft,#64748b);font-weight:500;margin-right:4px;', textContent: 'Item:' }),
+                    document.createTextNode(title)
+                ]),
                 cel('div', { class: 'pf-asset-sub', textContent: subParts.join(' · ') || 'Active Asset' })
             ])
         ]);
@@ -2987,12 +3009,12 @@ let cpUploadedFiles = [];
 let cpActiveQueryTypes = null;
 
 const CP_DEPARTMENTS = [
-    { id: "Technical", name: "Technical", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>' },
-    { id: "Accounts Team & Billing", name: "Accounts & Billing", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' },
-    { id: "Sales", name: "Sales", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
-    { id: "Demo", name: "Demo", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
-    { id: "Licence Activation", name: "Licence Activation", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' },
-    { id: "Other", name: "Other", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' }
+    { id: "Technical", name: "Technical", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>', color: "#2563eb", bg: "rgba(37, 99, 235, 0.1)" },
+    { id: "Accounts Team & Billing", name: "Accounts & Billing", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>', color: "#0f766e", bg: "rgba(15, 118, 110, 0.1)" },
+    { id: "Sales", name: "Sales", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>', color: "#8b5cf6", bg: "rgba(139, 92, 246, 0.1)" },
+    { id: "Demo", name: "Demo", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>', color: "#d97706", bg: "rgba(217, 119, 6, 0.1)" },
+    { id: "Licence Activation", name: "Licence Activation", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>', color: "#ea580c", bg: "rgba(234, 88, 12, 0.1)" },
+    { id: "Other", name: "Other", desc: "", icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>', color: "#64748b", bg: "rgba(100, 116, 139, 0.1)" }
 ];
 
 function initCustomerPortalWizard() {
@@ -3889,7 +3911,11 @@ function cpRenderSelectedDept() {
     const d = CP_DEPARTMENTS.find(dept => dept.id === cpSelectedDept) || CP_DEPARTMENTS[0];
 
     const leftWrap = cel('div', { class: 'smc-left' }, [
-        cel('div', { class: 'smc-ico', innerHTML: d.icon }),
+        cel('div', {
+            class: 'smc-ico',
+            style: `background: ${d.bg}; color: ${d.color};`,
+            innerHTML: d.icon
+        }),
         cel('div', { class: 'smc-info' }, [
             cel('div', { class: 'smc-title', textContent: d.name }),
             cel('div', { class: 'smc-sub', textContent: d.desc })
@@ -3929,7 +3955,11 @@ function cpRenderDeptModalGrid() {
             class: 'cp-dept-tile model-tile ' + (isSel ? 'selected' : ''),
             onclick: () => cpSelectDept(d.id)
         }, [
-            cel('div', { class: 'cp-dept-icon model-tile-ico', innerHTML: d.icon }),
+            cel('div', {
+                class: 'cp-dept-icon model-tile-ico',
+                style: `background: ${d.bg}; color: ${d.color};`,
+                innerHTML: d.icon
+            }),
             cel('div', { class: 'cp-dept-info' }, [
                 cel('div', { class: 'cp-dept-title model-tile-title', textContent: d.name }),
                 cel('div', { class: 'cp-dept-desc model-tile-sub', textContent: d.desc || "" })

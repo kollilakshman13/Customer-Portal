@@ -127,7 +127,7 @@ def get_portal_data():
             "name", "posting_date", "due_date", "net_total", "total_taxes_and_charges", "grand_total",
             "outstanding_amount", "status", "currency", "remarks", "company",
             "customer_address", "address_display", "shipping_address_name", "shipping_address",
-            "billing_address_gstin"
+            "billing_address_gstin", "custom_zoho_invoice"
         ],
         order_by="posting_date desc")
         
@@ -475,10 +475,6 @@ def create_support_ticket(
     issue.customer_name = customer_doc.customer_name
     issue.sales_person = sales_person
     issue.raised_by = user
-    issue.contact_email = contact_email
-    if contact_name:
-        issue.contact = contact_name
-    issue.person_name = person_name
 
     if department:
         issue.department = department
@@ -550,24 +546,26 @@ def create_support_ticket(
         db_priority = priority or "Medium"
     issue.priority = db_priority
     
-    query_type = category or ""
-    if query_type:
-        issue.custom_query_type = query_type
-        if frappe.db.exists("Issue Type", query_type):
-            issue.issue_type = query_type
-        else:
-            issue.issue_type = "Other"
-    else:
-        issue.issue_type = "Other"
+    # Query Type strictly mapped to custom_query_type
+    resolved_query_type = category or ""
+    if resolved_query_type:
+        if issue.meta.has_field("custom_query_type"):
+            issue.custom_query_type = resolved_query_type
+        elif issue.meta.has_field("query_type"):
+            issue.query_type = resolved_query_type
         
     issue.raised_via_channel = "Customer Portal"
     issue.via_customer_portal = 1
+    issue.flags.mute_emails = True
+    issue.flags.ignore_notifications = True
     issue.flags.create_communication = False
     issue.flags.ignore_permissions = True
     issue.flags.ignore_version = True
     issue.flags.ignore_links = True
 
+    prev_mute_emails = getattr(frappe.flags, "mute_emails", False)
     try:
+        frappe.flags.mute_emails = True
         issue.insert(ignore_permissions=True)
     except frappe.exceptions.TimestampMismatchError:
         pass
@@ -577,6 +575,26 @@ def create_support_ticket(
             issue.insert(ignore_permissions=True)
         except Exception:
             pass
+    finally:
+        frappe.flags.mute_emails = prev_mute_emails
+
+    # Explicitly sync contact fields directly to DB after insertion (prevents triggering on_insert notification hooks)
+    fields_to_sync = {
+        "person_name": person_name,
+        "contact_email": contact_email,
+        "contact": contact_name
+    }
+    for fld, val in fields_to_sync.items():
+        if val and str(val).strip():
+            try:
+                frappe.db.set_value("Issue", issue.name, fld, str(val).strip(), update_modified=False)
+                setattr(issue, fld, str(val).strip())
+            except Exception as ex:
+                frappe.log_error(f"Error setting field {fld}: {ex}")
+
+    # Safety check: ensure no email queue or automated communication was created for this portal ticket
+    frappe.db.sql("DELETE FROM `tabEmail Queue` WHERE reference_doctype = 'Issue' AND reference_name = %s", issue.name)
+    frappe.db.sql("DELETE FROM `tabCommunication` WHERE reference_doctype = 'Issue' AND reference_name = %s AND communication_type = 'Automated Message'", issue.name)
 
     frappe.db.commit()
     
@@ -824,6 +842,21 @@ def download_invoice_pdf(invoice_name, print_format=None):
             )
             print_format = formats[0].name if formats else "Standard"
 
+    doc = frappe.get_doc("Sales Invoice", invoice_name)
+    if doc.get("custom_zoho_invoice"):
+        from frappe.utils.file_manager import get_file
+        try:
+            fname, content = get_file(doc.custom_zoho_invoice)
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            pdf_b64 = base64.b64encode(content).decode("utf-8")
+            return {
+                "pdf_b64": pdf_b64,
+                "filename": fname or f"{invoice_name}.pdf"
+            }
+        except Exception as e:
+            frappe.log_error(f"Error loading custom zoho invoice for {invoice_name}: {e}", "Portal Invoice Zoho File Error")
+
     # Set flag so get_rendered_template skips its own permission check
     # (ownership was already validated above using the DB check)
     frappe.flags.ignore_print_permissions = True
@@ -831,7 +864,6 @@ def download_invoice_pdf(invoice_name, print_format=None):
         from frappe.www.printview import get_rendered_template, get_print_format_doc
         from frappe.utils.pdf import get_pdf
 
-        doc = frappe.get_doc("Sales Invoice", invoice_name)
         print_format_doc = get_print_format_doc(print_format, meta=doc.meta)
 
         html = get_rendered_template(
@@ -1052,17 +1084,24 @@ def get_ticket_details(ticket_name):
         if fname and furl:
             att_map[fname] = furl
 
-    # Filter activity for customer portal visibility (exclude internal notes and internal agent system logs)
+    # Filter activity for customer portal visibility (exclude internal notes, internal agent system logs, and redundant initial description)
     customer_activity = []
+    issue_desc_clean = frappe.utils.strip_html_tags(issue.get("description") or "").strip()
     allowed_types = {"Comment", "Communication", "Status Change", "Created", "Document Created", "File Attached", "Attachment", "Info Added", "Resolution"}
     for act in raw_activity:
         act_type = act.get("type") or ""
         desc = (act.get("description") or "").strip()
+        desc_clean = frappe.utils.strip_html_tags(desc).strip()
         
         # Exclude internal notes or hidden internal activity
         if act_type in allowed_types or "Status" in act_type:
             if "[Internal" in desc or "[Private]" in desc or act_type == "Internal Note":
                 continue
+
+            # Exclude initial ticket description from activity feed (since it's already shown in Overview)
+            if act_type in ("Communication", "Customer Message") and act.get("sent_or_received") != "Sent":
+                if desc_clean == issue_desc_clean or not act.get("recipients"):
+                    continue
 
             # Enrich plain text file references with clickable HTML links
             if att_map and desc:
@@ -1157,9 +1196,94 @@ def get_ticket_details(ticket_name):
 
     res_details = issue.get("resolution_details") or issue.get("resolution") or ""
     
-    cust_val = issue.customer or getattr(issue, "customer_name", "") or getattr(issue, "custom_customer", "") or ""
-    
+    def is_internal_or_system_comment(text, sender=""):
+        if not text:
+            return True
+        lower_text = text.lower()
+        if "[internal" in lower_text or "[private]" in lower_text or "[system]" in lower_text:
+            return True
+        if "escalated to" in lower_text and ("sla" in lower_text or "threshold" in lower_text or "assigned:" in lower_text or "support" in lower_text):
+            return True
+        if "sla response breach" in lower_text or "sla resolution breach" in lower_text or "breach threshold" in lower_text:
+            return True
+        if "initial assignment to creator" in lower_text or "assigned to creator" in lower_text:
+            return True
+        if sender == "Administrator" and ("escalated" in lower_text or "assigned" in lower_text or "sla" in lower_text):
+            return True
+        return False
+
+    comments_list = []
+    try:
+        # 1. Fetch from Comment doctype (Public user comments)
+        if frappe.db.exists("DocType", "Comment"):
+            raw_comments = frappe.get_all("Comment",
+                filters={"reference_doctype": "Issue", "reference_name": ticket_name, "comment_type": "Comment"},
+                fields=["name", "comment_by", "comment_email", "content", "creation"],
+                order_by="creation asc",
+                ignore_permissions=True
+            )
+            for cm in raw_comments:
+                content_str = (cm.content or "").strip()
+                sender_val = cm.comment_email or cm.comment_by or ""
+                if is_internal_or_system_comment(content_str, sender_val):
+                    continue
+                user_meta = resolve_user_meta(sender_val)
+                comments_list.append({
+                    "name": cm.name,
+                    "sender": sender_val,
+                    "sender_full_name": user_meta.get("full_name") or cm.comment_by or "User",
+                    "content": content_str,
+                    "creation": str(cm.creation),
+                    "timestamp": str(cm.creation)
+                })
+
+        # 2. Fetch from Communication doctype (System user & Agent replies)
+        if frappe.db.exists("DocType", "Communication"):
+            raw_comms = frappe.get_all("Communication",
+                filters={
+                    "reference_doctype": "Issue",
+                    "reference_name": ticket_name,
+                    "communication_type": ["in", ["Communication", "Comment", "Feedback"]]
+                },
+                fields=["name", "sender", "sender_full_name", "content", "creation", "subject", "sent_or_received"],
+                order_by="creation asc",
+                ignore_permissions=True
+            )
+            for cm in raw_comms:
+                content_str = (cm.content or "").strip()
+                if is_internal_or_system_comment(content_str, cm.sender):
+                    continue
+                # Exclude automated system email notification templates
+                subj = (cm.get("subject") or "").lower()
+                if "your ticket has been created" in subj or "notification sent to" in subj:
+                    continue
+                if "<table" in content_str or "<!doctype" in content_str.lower() or "<html" in content_str.lower():
+                    continue
+
+                content_clean = frappe.utils.strip_html_tags(content_str).strip()
+                if content_clean == issue_desc_clean and cm.get("sent_or_received") != "Sent":
+                    continue
+                if any(existing.get("name") == cm.name or existing.get("content") == content_str for existing in comments_list):
+                    continue
+
+                user_meta = resolve_user_meta(cm.sender)
+                sender_name = cm.sender_full_name or user_meta.get("full_name") or cm.sender or "Support Team"
+                comments_list.append({
+                    "name": cm.name,
+                    "sender": cm.sender,
+                    "sender_full_name": sender_name,
+                    "content": content_str,
+                    "creation": str(cm.creation),
+                    "timestamp": str(cm.creation)
+                })
+
+        # Sort all conversation messages chronologically
+        comments_list.sort(key=lambda x: str(x.get("creation") or ""))
+    except Exception as e:
+        frappe.log_error(f"Error fetching comments for issue {ticket_name}: {e}", "Portal Ticket Details")
+
     return {
+        "comments": comments_list,
         "assignees": assignees,
         "assignees_details": assignees_details,
         "name": issue.name,

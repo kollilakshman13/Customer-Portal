@@ -23,9 +23,9 @@
   <!-- ============ SIDEBAR ============ -->
   <div class="side">
     <div class="side-brand">
-      <div class="mark">64</div>
-      <div>
-        <div class="name">NETWORK SECURITY</div>
+      <div class="mark" id="side-brand-mark">{{ company_mark or '64' }}</div>
+      <div class="brand-text">
+        <div class="name" id="side-brand-name">{{ company_display_name or company_name or 'NETWORK SECURITY' }}</div>
         <div class="sub">CUSTOMER PORTAL</div>
       </div>
       <button class="side-close-btn" id="side-close-btn" onclick="closeMobileSidebar()" title="Close navigation"><i
@@ -76,6 +76,13 @@
         </div>
       </div>
       <div class="topbar-right">
+        <div id="admin-viewing-badge" class="admin-viewing-badge" style="display:none;"
+          onclick="openAdminCustomerModal()" title="Click to switch customer account">
+          <span class="av-dot"></span>
+          <span class="av-label">Viewing As:</span>
+          <span class="av-name" id="admin-viewing-cust-name">-</span>
+          <button type="button" class="av-switch-btn"><i class="ti ti-arrows-exchange"></i> Switch</button>
+        </div>
         <div class="search-box"><i class="ti ti-search"></i><input id="global-search-input" placeholder="Search…"></div>
         <i class="ti ti-bell bell"></i>
         <div class="avatar" id="topbar-avatar" style="cursor:pointer;" onclick="toggleAccountDropdown(event, 'topbar')"
@@ -96,6 +103,26 @@
     </div>
 
     <div class="content">
+
+      <!-- ===== PERMISSION DENIED SCREEN ===== -->
+      <div class="page" id="page-permission-denied" style="display:none;">
+        <div class="card" style="max-width:540px;margin:40px auto;padding:36px 24px;text-align:center;">
+          <div
+            style="width:64px;height:64px;border-radius:50%;background:var(--red-wash, #fef2f2);color:var(--red, #ef4444);display:grid;place-items:center;font-size:30px;margin:0 auto 16px;">
+            <i class="ti ti-shield-lock"></i>
+          </div>
+          <h2 style="font-size:20px;margin-bottom:8px;color:var(--ink);">Permission Denied</h2>
+          <p id="portal-perm-denied-msg"
+            style="color:var(--ink-soft);font-size:13.5px;line-height:1.5;margin-bottom:24px;">
+            You do not have permission to view this customer account.
+          </p>
+          <div style="display:flex;gap:10px;justify-content:center;">
+            <button class="btn primary" onclick="openAdminCustomerModal()"><i class="ti ti-building"></i> Select Another
+              Customer</button>
+            <a href="/app" class="btn secondary"><i class="ti ti-arrow-back-up"></i> Go to Desk</a>
+          </div>
+        </div>
+      </div>
 
       <!-- ===== DASHBOARD ===== -->
       <div class="page on" id="page-dashboard">
@@ -131,7 +158,7 @@
             <a class="db-card-link" onclick="go('account')">View Security Center <i class="ti ti-arrow-right"></i></a>
           </div>
 
-          
+
 
           <!-- Card 2: Upcoming Renewals -->
           <div class="card db-stat-card" style="cursor:pointer;" onclick="go('renewals', 'due')">
@@ -389,7 +416,7 @@
             <div class="field-row"><span class="l">Company</span><span class="v" id="rd-company">-</span></div>
             <div class="field-row"><span class="l">Status</span><span class="v" id="rd-status"
                 style="color:var(--green)">Active</span></div>
-            <div style="display:flex;gap:10px;margin-top:16px;">
+            <div style="display:none;gap:10px;margin-top:16px;">
               <button class="btn" style="flex:1;justify-content:center;"
                 onclick="alert('Quote download feature selected.')"><i class="ti ti-download"></i> Download
                 Quote</button>
@@ -644,7 +671,7 @@
         <!-- Persistent Header Card across all tabs -->
         <div class="td-header">
           <div class="td-header-top">
-            <div>
+            <div class="td-header-left">
               <div class="td-status-line">
                 <span class="td-led" id="sd-status-led"></span>
                 <span class="td-tid mono" id="sd-ticket-id"></span>
@@ -657,10 +684,16 @@
               <div class="td-meta">
                 <span><i class="ti ti-calendar-plus"></i> Created <strong id="sd-created">-</strong></span>
                 <span><i class="ti ti-refresh"></i> Updated <strong id="sd-updated">-</strong></span>
-                <span><i class="ti ti-user"></i> <strong id="sd-salesperson">-</strong></span>
+                <span><i class="ti ti-user"></i> <strong id="sd-workingagent">-</strong></span>
               </div>
             </div>
-            <div class="td-actions">
+
+            <div class="td-header-right">
+              <div class="td-actions">
+                <div id="sd-renewals-list">
+                  <div class="td-empty-msg">No active renewals linked to this ticket.</div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -682,11 +715,12 @@
           </div>
         </div>
 
-        <!-- OVERVIEW PANEL -->
-        <div class="td-page-panel active" id="tab-overview">
-          <div class="td-grid">
-            <!-- Left Main Column -->
-            <div>
+        <!-- Main 2-Column Grid (Persistent Sidebar across all tabs) -->
+        <div class="td-grid">
+          <!-- Left Column (Tab Panels) -->
+          <div class="td-main-col">
+            <!-- OVERVIEW PANEL -->
+            <div class="td-page-panel active" id="tab-overview">
               <!-- Issue Details Card -->
               <div class="td-card">
                 <div class="td-card-title"><i class="ti ti-file-description"></i> Issue Details</div>
@@ -696,9 +730,7 @@
               <!-- Attachments Preview Card -->
               <div class="td-card">
                 <div class="td-card-title" style="display:flex;justify-content:space-between;align-items:center;">
-                  <span><i class="ti ti-paperclip"></i> Attachments <span
-                      style="color:var(--td-faint,#9aa0b8);font-weight:400;">— see Files tab for all (<span
-                        id="sd-att-count">0</span>)</span></span>
+                  <span><i class="ti ti-paperclip"></i> Attachments </span>
                   <label class="td-btn" style="cursor:pointer;font-size:11.5px;padding:4px 10px;margin:0;">
                     <input type="file" id="sd-direct-file-input" multiple style="display:none;"
                       onchange="handleDirectAttachmentUpload(event)">
@@ -735,8 +767,10 @@
                   </div>
                   <div class="td-reply-foot">
                     <div class="td-reply-icons">
-                      <input type="file" id="sd-reply-file-input" multiple style="display:none !important;" onchange="window.handleReplyFileUpload(event)">
-                      <label for="sd-reply-file-input" style="cursor:pointer;margin:0;display:inline-flex;align-items:center;" title="Attach file">
+                      <input type="file" id="sd-reply-file-input" multiple style="display:none !important;"
+                        onchange="window.handleReplyFileUpload(event)">
+                      <label for="sd-reply-file-input"
+                        style="cursor:pointer;margin:0;display:inline-flex;align-items:center;" title="Attach file">
                         <i class="ti ti-paperclip"></i>
                       </label>
                     </div>
@@ -748,99 +782,90 @@
               </div>
             </div>
 
-            <!-- Right Sidebar Column -->
-            <div>
-              <!-- Ticket Info Card -->
+            <!-- ACTIVITY PANEL -->
+            <div class="td-page-panel" id="tab-activity">
               <div class="td-card">
-                <div class="td-card-title"><i class="ti ti-info-circle"></i> Ticket Info</div>
-                <div class="td-kv"><span class="k">Support Type</span><span class="v" id="sd-info-support-type">-</span>
-                </div>
-                <div class="td-kv"><span class="k">Query Type</span><span class="v" id="sd-info-query-type">-</span>
-                </div>
-                <div class="td-kv"><span class="k">Assign To</span><span class="v" id="sd-workingagent">-</span>
+                <div class="td-card-title"><i class="ti ti-history"></i> Full Activity Log</div>
+                <div class="td-log-feed" id="sd-activity-log-feed">
+                  <div class="td-empty-msg">No activity recorded yet.</div>
                 </div>
               </div>
+            </div>
 
-              <!-- SLA Monitor Card -->
+            <!-- EMAILS PANEL -->
+            <div class="td-page-panel" id="tab-emails">
               <div class="td-card">
-                <div class="td-sla-top">
-                  <div class="td-card-title" style="margin:0;"><i class="ti ti-clock-check"></i> SLA Monitor</div>
-                  <span class="td-sla-badge" id="sd-sla-status-badge">WITHIN SLA</span>
-                </div>
-                <div class="td-gauge-wrap">
-                  <div class="td-gauge">
-                    <svg width="76" height="76" viewBox="0 0 76 76">
-                      <circle cx="38" cy="38" r="32" fill="none" stroke="#e2e6f0" stroke-width="7" />
-                      <circle cx="38" cy="38" r="32" fill="none" stroke="#0f7fb8" stroke-width="7"
-                        id="sd-sla-gauge-circle" stroke-dasharray="201" stroke-dashoffset="150.75"
-                        stroke-linecap="round" />
-                    </svg>
-                    <div class="td-gauge-label" id="sd-sla-progress-pct">0%</div>
-                  </div>
-                  <div>
-                    <div class="td-sla-due">Expected resolution</div>
-                    <div class="td-sla-date" id="sd-expected-resolution">-</div>
-                  </div>
-                </div>
-                <div class="td-sla-split">
-                  <div class="td-sla-box">
-                    <div class="k">Response</div>
-                    <div class="v" id="sd-response-sla-box"><span id="sd-response-sla-val">-</span></div>
-                  </div>
-                  <div class="td-sla-box">
-                    <div class="k">Resolution</div>
-                    <div class="v" id="sd-resolution-sla-box"><span id="sd-resolution-sla-val">-</span></div>
-                  </div>
+                <div class="td-card-title"><i class="ti ti-mail"></i> Email Delivery Log</div>
+                <div class="td-elog-feed" id="sd-email-log-feed">
+                  <div class="td-empty-msg">No emails logged for this ticket.</div>
                 </div>
               </div>
+            </div>
 
-              <!-- Contact Details Card -->
-              <div class="td-card" id="sd-contacts-card" style="margin-top:16px;">
-                <div class="td-card-title"><i class="ti ti-users"></i> Contact Details</div>
-                <div id="sd-contacts-list">
-                  <div class="td-empty-msg">No contacts linked to this ticket.</div>
-                </div>
-              </div>
-
-              <!-- Active Renewals / Assets Card -->
-              <div class="td-card" id="sd-renewals-card" style="margin-top:16px;">
-                <div class="td-card-title"><i class="ti ti-shield-check"></i> Assets</div>
-                <div id="sd-renewals-list">
-                  <div class="td-empty-msg">No active renewals linked to this ticket.</div>
+            <!-- FILES PANEL -->
+            <div class="td-page-panel" id="tab-files">
+              <div class="td-card">
+                <div class="td-card-title"><i class="ti ti-paperclip"></i> All Attachments (<span
+                    id="sd-files-grid-count">0</span>)</div>
+                <div class="td-attach-grid" id="sd-files-attach-grid">
+                  <div class="td-empty-msg">No attachments uploaded.</div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- ACTIVITY PANEL -->
-        <div class="td-page-panel" id="tab-activity">
-          <div class="td-card">
-            <div class="td-card-title"><i class="ti ti-history"></i> Full Activity Log</div>
-            <div class="td-log-feed" id="sd-activity-log-feed">
-              <div class="td-empty-msg">No activity recorded yet.</div>
+          <!-- Persistent Right Sidebar Column (Shown on all tabs) -->
+          <div class="td-sidebar-col">
+            <!-- Ticket Info Card -->
+            <div class="td-card">
+              <div class="td-card-title"><i class="ti ti-info-circle"></i> Ticket Info</div>
+              <div class="td-kv"><span class="k">Support Type</span><span class="v" id="sd-info-support-type">-</span>
+              </div>
+              <div class="td-kv"><span class="k">Query Type</span><span class="v" id="sd-info-query-type">-</span></div>
+              <div class="td-kv"><span class="k">Sales Person</span><span class="v" id="sd-salesperson">-</span></div>
             </div>
-          </div>
-        </div>
 
-        <!-- EMAILS PANEL -->
-        <div class="td-page-panel" id="tab-emails">
-          <div class="td-card">
-            <div class="td-card-title"><i class="ti ti-mail"></i> Email Delivery Log</div>
-            <div class="td-elog-feed" id="sd-email-log-feed">
-              <div class="td-empty-msg">No emails logged for this ticket.</div>
+            <!-- SLA Monitor Card -->
+            <div class="td-card">
+              <div class="td-sla-top">
+                <div class="td-card-title" style="margin:0;"><i class="ti ti-clock-check"></i> SLA Monitor</div>
+                <span class="td-sla-badge" id="sd-sla-status-badge">WITHIN SLA</span>
+              </div>
+              <div class="td-gauge-wrap">
+                <div class="td-gauge">
+                  <svg width="76" height="76" viewBox="0 0 76 76">
+                    <circle cx="38" cy="38" r="32" fill="none" stroke="#e2e6f0" stroke-width="7" />
+                    <circle cx="38" cy="38" r="32" fill="none" stroke="#0f7fb8" stroke-width="7"
+                      id="sd-sla-gauge-circle" stroke-dasharray="201" stroke-dashoffset="150.75"
+                      stroke-linecap="round" />
+                  </svg>
+                  <div class="td-gauge-label" id="sd-sla-progress-pct">0%</div>
+                </div>
+                <div>
+                  <div class="td-sla-due">Expected resolution</div>
+                  <div class="td-sla-date" id="sd-expected-resolution">-</div>
+                </div>
+              </div>
+              <div class="td-sla-split">
+                <div class="td-sla-box">
+                  <div class="k">Response</div>
+                  <div class="v" id="sd-response-sla-box"><span id="sd-response-sla-val">-</span></div>
+                </div>
+                <div class="td-sla-box">
+                  <div class="k">Resolution</div>
+                  <div class="v" id="sd-resolution-sla-box"><span id="sd-resolution-sla-val">-</span></div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <!-- FILES PANEL -->
-        <div class="td-page-panel" id="tab-files">
-          <div class="td-card">
-            <div class="td-card-title"><i class="ti ti-paperclip"></i> All Attachments (<span
-                id="sd-files-grid-count">0</span>)</div>
-            <div class="td-attach-grid" id="sd-files-attach-grid">
-              <div class="td-empty-msg">No attachments uploaded.</div>
+            <!-- Contact Details Card -->
+            <div class="td-card" id="sd-contacts-card" style="margin-top:16px;">
+              <div class="td-card-title"><i class="ti ti-users"></i> Contact Details</div>
+              <div id="sd-contacts-list">
+                <div class="td-empty-msg">No contacts linked to this ticket.</div>
+              </div>
             </div>
+            
           </div>
         </div>
       </div>
@@ -946,10 +971,14 @@
             </div>
 
             <div class="cp-wiz-footer">
-              <div></div>
-              <button class="btn primary" onclick="cpGoNextStep(1)">
-                Continue to Subject &amp; Dept <i class="ti ti-arrow-right"></i>
+              <button type="button" class="btn" onclick="go('tickets')">
+                <i class="ti ti-x"></i> Cancel
               </button>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn primary" onclick="cpGoNextStep(1)">
+                  Next <i class="ti ti-arrow-right"></i>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -977,13 +1006,47 @@
               </div>
             </div>
 
+            <!-- Product Association Type (shown when Department is Technical) -->
+            <div id="cp-product-assoc-grp" style="margin-top:16px;display:none;">
+              <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px;">Product Association Type
+                <span style="color:var(--red);">*</span></label>
+              <div class="cp-assoc-grid">
+                <div class="cp-assoc-card" id="cp-assoc-existing" onclick="cpSelectProductAssoc('Existing Asset')">
+                  <div class="cp-assoc-icon"><i class="ti ti-server-2"></i></div>
+                  <div class="cp-assoc-info">
+                    <div class="cp-assoc-title">Existing Asset</div>
+                    <div class="cp-assoc-sub">Active Subscription / AMC</div>
+                  </div>
+                  <div class="cp-assoc-chk">
+                    <div class="cp-assoc-dot"></div>
+                  </div>
+                </div>
+                <div class="cp-assoc-card" id="cp-assoc-new" onclick="cpSelectProductAssoc('New Product')">
+                  <div class="cp-assoc-icon green"><i class="ti ti-box"></i></div>
+                  <div class="cp-assoc-info">
+                    <div class="cp-assoc-title">New Product</div>
+                    <div class="cp-assoc-sub">New / Unregistered Product</div>
+                  </div>
+                  <div class="cp-assoc-chk">
+                    <div class="cp-assoc-dot"></div>
+                  </div>
+                </div>
+              </div>
+              <input type="hidden" id="nt-product-association-type" name="product_association_type" value="">
+            </div>
+
             <div class="cp-wiz-footer">
-              <button class="btn" onclick="cpGoPrevStep(2)">
-                <i class="ti ti-arrow-left"></i> Back
+              <button type="button" class="btn" onclick="go('tickets')">
+                <i class="ti ti-x"></i> Cancel
               </button>
-              <button class="btn primary" onclick="cpGoNextStep(2)">
-                Continue to Active Subscription <i class="ti ti-arrow-right"></i>
-              </button>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn" onclick="cpGoPrevStep(2)">
+                  <i class="ti ti-arrow-left"></i> Back
+                </button>
+                <button type="button" class="btn primary" onclick="cpGoNextStep(2)">
+                  Next <i class="ti ti-arrow-right"></i>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1004,12 +1067,17 @@
             </div>
 
             <div class="cp-wiz-footer">
-              <button class="btn" onclick="cpGoPrevStep(3)">
-                <i class="ti ti-arrow-left"></i> Back
+              <button type="button" class="btn" onclick="go('tickets')">
+                <i class="ti ti-x"></i> Cancel
               </button>
-              <button class="btn primary" onclick="cpGoNextStep(3)">
-                Continue to Query Type <i class="ti ti-arrow-right"></i>
-              </button>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn" onclick="cpGoPrevStep(3)">
+                  <i class="ti ti-arrow-left"></i> Back
+                </button>
+                <button type="button" class="btn primary" onclick="cpGoNextStep(3)">
+                  Next <i class="ti ti-arrow-right"></i>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1033,12 +1101,17 @@
             <input type="hidden" id="nt-priority" value="Medium">
 
             <div class="cp-wiz-footer">
-              <button class="btn" onclick="cpGoPrevStep(4)">
-                <i class="ti ti-arrow-left"></i> Back
+              <button type="button" class="btn" onclick="go('tickets')">
+                <i class="ti ti-x"></i> Cancel
               </button>
-              <button class="btn primary" onclick="cpGoNextStep(4)">
-                Continue to Details &amp; Files <i class="ti ti-arrow-right"></i>
-              </button>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn" onclick="cpGoPrevStep(4)">
+                  <i class="ti ti-arrow-left"></i> Back
+                </button>
+                <button type="button" class="btn primary" onclick="cpGoNextStep(4)">
+                  Next <i class="ti ti-arrow-right"></i>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1049,9 +1122,9 @@
             <h3 style="margin-bottom:16px;"><i class="ti ti-file-text"
                 style="margin-right:6px;color:var(--blue);"></i>Issue Description &amp; Attachments</h3>
             <div>
-              <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:4px;">Detailed Description
+              <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:4px;">Description
                 <span style="color:var(--red);">*</span></label>
-              <textarea id="nt-description" rows="6"
+              <textarea id="nt-description" rows="8"
                 placeholder="Describe what is happening, error messages, and what steps you've already tried..."
                 style="width:100%;min-height:120px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;font-family:'Inter';"></textarea>
             </div>
@@ -1070,42 +1143,144 @@
             </div>
 
             <div class="cp-wiz-footer">
-              <button class="btn" onclick="cpGoPrevStep(5)">
-                <i class="ti ti-arrow-left"></i> Back
+              <button type="button" class="btn" onclick="go('tickets')">
+                <i class="ti ti-x"></i> Cancel
               </button>
-              <button class="btn primary" onclick="cpGoNextStep(5)">
-                Continue to Review &amp; Submit <i class="ti ti-arrow-right"></i>
-              </button>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn" onclick="cpGoPrevStep(5)">
+                  <i class="ti ti-arrow-left"></i> Back
+                </button>
+                <button type="button" class="btn primary" onclick="cpGoNextStep(5)">
+                  Next <i class="ti ti-arrow-right"></i>
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         <!-- STEP 6 PANEL: REVIEW & SUBMIT -->
         <div class="cp-step-panel" id="cp-step-panel-6">
-          <div class="card" style="padding:22px;">
-            <h3 style="margin-bottom:16px;"><i class="ti ti-clipboard-check"
-                style="margin-right:6px;color:var(--blue);"></i>Review &amp; Confirm Details</h3>
-            <div class="cp-summary-card">
-              <div class="cp-sum-title"><i class="ti ti-checks" style="margin-right:6px;color:var(--blue);"></i>Ticket
-                Submission Breakdown</div>
-              <div class="cp-sum-grid">
-                <div><span class="cp-sum-lbl">Customer:</span> <strong id="cp-sum-customer">-</strong></div>
-                <div><span class="cp-sum-lbl">Contact Person:</span> <strong id="cp-sum-contact">-</strong></div>
-                <div><span class="cp-sum-lbl">Subject:</span> <strong id="cp-sum-subject">-</strong></div>
-                <div><span class="cp-sum-lbl">Department:</span> <strong id="cp-sum-dept">-</strong></div>
-                <div><span class="cp-sum-lbl">Active Asset:</span> <strong id="cp-sum-sub">-</strong></div>
-                <div><span class="cp-sum-lbl">Query Type:</span> <strong id="cp-sum-category">-</strong></div>
-                <div><span class="cp-sum-lbl">Attachments:</span> <strong id="cp-sum-files">0 files</strong></div>
+          <div class="card" style="padding:24px;">
+            <div
+              style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;border-bottom:1px solid var(--line);padding-bottom:14px;">
+              <div>
+                <h3 style="margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px;">
+                  <i class="ti ti-clipboard-check" style="color:var(--blue);font-size:20px;"></i>
+                  Review &amp; Confirm Ticket Details
+                </h3>
+                <div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px;">Please verify your technical request
+                  details before final submission</div>
+              </div>
+              <span class="badge blue" style="font-size:12px;padding:4px 10px;font-weight:600;"><i
+                  class="ti ti-circle-check"></i> Ready to Submit</span>
+            </div>
+
+            <!-- Review Cards Grid -->
+            <div class="cp-review-grid" style="margin-bottom:16px;">
+
+              <!-- Card 1: Account & Contact -->
+              <div class="cp-review-box">
+                <div class="cp-review-box-head">
+                  <span class="cp-rb-title"><i class="ti ti-building"></i> Account &amp; Contact</span>
+                  <button type="button" class="cp-rb-edit" onclick="cpGoToStep(1)"><i class="ti ti-pencil"></i>
+                    Edit</button>
+                </div>
+                <div class="cp-rb-body">
+                  <div class="cp-rb-row">
+                    <span class="cp-rb-lbl">Customer</span>
+                    <strong class="cp-rb-val" id="cp-sum-customer">-</strong>
+                  </div>
+                  <div class="cp-rb-row">
+                    <span class="cp-rb-lbl">Contact Person</span>
+                    <strong class="cp-rb-val" id="cp-sum-contact">-</strong>
+                  </div>
+                  <div class="cp-rb-row" id="cp-sum-sales-row">
+                    <span class="cp-rb-lbl">Account Manager</span>
+                    <strong class="cp-rb-val" id="cp-sum-sales-person">-</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Card 2: Department & Product -->
+              <div class="cp-review-box">
+                <div class="cp-review-box-head">
+                  <span class="cp-rb-title"><i class="ti ti-category"></i> Department &amp; Product</span>
+                  <button type="button" class="cp-rb-edit" onclick="cpGoToStep(2)"><i class="ti ti-pencil"></i>
+                    Edit</button>
+                </div>
+                <div class="cp-rb-body">
+                  <div class="cp-rb-row">
+                    <span class="cp-rb-lbl">Department</span>
+                    <strong class="cp-rb-val" id="cp-sum-dept">-</strong>
+                  </div>
+                  <div class="cp-rb-row" id="cp-sum-assoc-row">
+                    <span class="cp-rb-lbl">Product Association</span>
+                    <strong class="cp-rb-val" id="cp-sum-assoc">-</strong>
+                  </div>
+                  <div class="cp-rb-row" id="cp-sum-sub-row">
+                    <span class="cp-rb-lbl">Active Asset</span>
+                    <strong class="cp-rb-val" id="cp-sum-sub">-</strong>
+                  </div>
+                  <div class="cp-rb-row" id="cp-sum-query-row">
+                    <span class="cp-rb-lbl">Query Type</span>
+                    <strong class="cp-rb-val" id="cp-sum-category">-</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 3: Issue Subject & Description -->
+            <div class="cp-review-box" style="margin-bottom:16px;">
+              <div class="cp-review-box-head">
+                <span class="cp-rb-title"><i class="ti ti-file-text"></i> Issue Subject &amp; Description</span>
+                <button type="button" class="cp-rb-edit" onclick="cpGoToStep(5)"><i class="ti ti-pencil"></i>
+                  Edit</button>
+              </div>
+              <div class="cp-rb-body">
+                <div style="margin-bottom:12px;">
+                  <div
+                    style="font-size:11.5px;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-soft);font-weight:600;margin-bottom:4px;">
+                    Subject</div>
+                  <div
+                    style="font-size:14px;font-weight:700;color:var(--ink);background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;"
+                    id="cp-sum-subject">-</div>
+                </div>
+                <div>
+                  <div
+                    style="font-size:11.5px;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-soft);font-weight:600;margin-bottom:4px;">
+                    Detailed Description</div>
+                  <div id="cp-sum-description" class="cp-review-desc-box">-</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 4: Attachments List -->
+            <div class="cp-review-box">
+              <div class="cp-review-box-head">
+                <span class="cp-rb-title"><i class="ti ti-paperclip"></i> Attachments (<span
+                    id="cp-sum-files-count">0</span>)</span>
+                <button type="button" class="cp-rb-edit" onclick="cpGoToStep(5)"><i class="ti ti-pencil"></i>
+                  Edit</button>
+              </div>
+              <div class="cp-rb-body">
+                <div id="cp-sum-attachments-list" class="cp-review-files-grid">
+                  <!-- Rendered dynamically -->
+                </div>
               </div>
             </div>
 
             <div class="cp-wiz-footer">
-              <button class="btn" onclick="cpGoPrevStep(6)">
-                <i class="ti ti-arrow-left"></i> Back to Details
+              <button type="button" class="btn" onclick="go('tickets')">
+                <i class="ti ti-x"></i> Cancel
               </button>
-              <button class="btn primary" id="nt-submit-btn" onclick="submitNewTicket()">
-                <i class="ti ti-send"></i> Submit Ticket Now
-              </button>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn" onclick="cpGoPrevStep(6)">
+                  <i class="ti ti-arrow-left"></i> Back
+                </button>
+                <button type="button" class="btn primary" id="nt-submit-btn" onclick="submitNewTicket()">
+                  <i class="ti ti-send"></i> Submit Ticket Now
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1113,11 +1288,6 @@
 
       <!-- ===== ACCOUNT ===== -->
       <div class="page" id="page-account">
-        <!--<div class="detail-head">
-          <div>
-            <h1 style="font-size:22px;">Profile &amp; Settings</h1>
-          </div>
-        </div>-->
         <!-- Company Profile Top Header Card (Matching Reference Image & customer-portal-view) -->
         <div class="pf-company-card-v2">
           <div class="pf-company-card-left">
@@ -1152,46 +1322,74 @@
           </div>
         </div>
 
-        <div class="card" style="margin-top:16px;">
-          <h3 style="margin-bottom:14px;"><i class="ti ti-headset" style="margin-right:6px;color:var(--blue);"></i>Your
-            Account Support Team</h3>
-          <div id="acct-team-cards-container" class="grid3"
-            style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:14px;">
-            <div style="color:var(--ink-soft);font-size:13px;padding:8px 0;">Loading support team details...</div>
+        <!-- Account Section Sub-Tabs -->
+        <div class="pf-acct-tabs" id="pf-acct-tabs">
+          <button type="button" class="pf-acct-tab active" onclick="acctTab(this, 'acct-tab-overview')">
+            <i class="ti ti-layout-dashboard"></i> Overview
+          </button>
+          <button type="button" class="pf-acct-tab" onclick="acctTab(this, 'acct-tab-addresses')">
+            <i class="ti ti-map-pins"></i> Addresses <span class="pf-acct-tab-badge" id="acct-addr-tab-count">0</span>
+          </button>
+          <button type="button" class="pf-acct-tab" onclick="acctTab(this, 'acct-tab-contacts')">
+            <i class="ti ti-users"></i> Contacts <span class="pf-acct-tab-badge" id="acct-contact-tab-count">0</span>
+          </button>
+        </div>
+
+        <!-- Tab 1: Overview Panel (Support Team) -->
+        <div class="pf-acct-panel active" id="acct-tab-overview">
+          <div class="card" style="margin-top:16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+              <div>
+                <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px;">
+                  <i class="ti ti-headset" style="color:var(--blue);font-size:20px;"></i>Your Account Support Team
+                </h3>
+                <div style="font-size:12.5px;color:var(--ink-soft);margin-top:4px;">
+                  Dedicated key contacts assigned to manage your account, technical needs, and billing queries
+                </div>
+              </div>
+            </div>
+            <div id="acct-team-cards-container" class="grid3"
+              style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:14px;">
+              <div style="color:var(--ink-soft);font-size:13px;padding:8px 0;">Loading support team details...</div>
+            </div>
           </div>
         </div>
 
-        <!-- Dedicated Registered Addresses Card Section -->
-        <div class="card" style="margin-top:20px;padding:22px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-            <div>
-              <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px;">
-                <i class="ti ti-map-pins" style="color:var(--blue);font-size:20px;"></i>Registered Addresses
-              </h3>
-              <div style="font-size:12.5px;color:var(--ink-soft);margin-top:4px;">
-                Your verified billing and shipping locations for invoices, licensing &amp; physical dispatches
+        <!-- Tab 2: Addresses Panel (Registered Addresses) -->
+        <div class="pf-acct-panel" id="acct-tab-addresses" style="display:none;">
+          <div class="card" style="margin-top:16px;padding:22px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+              <div>
+                <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px;">
+                  <i class="ti ti-map-pins" style="color:var(--blue);font-size:20px;"></i>Registered Addresses
+                </h3>
+                <div style="font-size:12.5px;color:var(--ink-soft);margin-top:4px;">
+                  Your verified billing and shipping locations for invoices, licensing &amp; physical dispatches
+                </div>
               </div>
             </div>
-          </div>
-          <div id="acct-addresses-container">
-            <div style="color:var(--ink-soft);font-size:13px;padding:12px 0;">Loading address details...</div>
+            <div id="acct-addresses-container">
+              <div style="color:var(--ink-soft);font-size:13px;padding:12px 0;">Loading address details...</div>
+            </div>
           </div>
         </div>
 
-        <!-- Dedicated Team Contacts Card Section (BELOW Addresses) -->
-        <div class="card" style="margin-top:20px;padding:22px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-            <div>
-              <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px;">
-                <i class="ti ti-users" style="color:var(--blue);font-size:20px;"></i>Team Contacts
-              </h3>
-              <div style="font-size:12.5px;color:var(--ink-soft);margin-top:4px;">
-                Authorized team members and Technical Points of Contact (TPOC) for your organization
+        <!-- Tab 3: Contacts Panel (Team Contacts) -->
+        <div class="pf-acct-panel" id="acct-tab-contacts" style="display:none;">
+          <div class="card" style="margin-top:16px;padding:22px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+              <div>
+                <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px;">
+                  <i class="ti ti-users" style="color:var(--blue);font-size:20px;"></i>Team Contacts
+                </h3>
+                <div style="font-size:12.5px;color:var(--ink-soft);margin-top:4px;">
+                  Authorized team members and Technical Points of Contact (TPOC) for your organization
+                </div>
               </div>
             </div>
-          </div>
-          <div id="acct-contacts-container">
-            <div style="color:var(--ink-soft);font-size:13px;padding:12px 0;">Loading team contacts...</div>
+            <div id="acct-contacts-container">
+              <div style="color:var(--ink-soft);font-size:13px;padding:12px 0;">Loading team contacts...</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1610,6 +1808,39 @@
         <span style="font-size:14px; font-weight:500;">Loading Sales Invoice PDF...</span>
       </div>
       <iframe id="cp-pdf-modal-iframe" style="width:100%; height:100%; border:none; display:none;"></iframe>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ADMIN / SYSTEM USER SELECT CUSTOMER MODAL ===== -->
+<div class="cp-modal-backdrop" id="modal-admin-select-customer"
+  style="display:none; align-items:center; justify-content:center;">
+  <div class="cp-modal-dialog"
+    style="max-width:620px; width:95%; max-height:85vh; display:flex; flex-direction:column;">
+    <div class="cp-modal-header" style="background:#f8fafc; padding:16px 20px;">
+      <div>
+        <h3 style="margin:0;font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;">
+          <i class="ti ti-building" style="color:var(--blue);"></i> Select Customer Account
+        </h3>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:2px;">
+          Choose an authorized customer to view and manage their portal account
+        </div>
+      </div>
+      <button type="button" class="cp-modal-close" onclick="closeAdminCustomerModal()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="cp-modal-body" style="padding:16px 20px; overflow-y:auto; flex:1;">
+      <div class="cp-modal-search-box"
+        style="margin-bottom:14px; display:flex; align-items:center; background:#ffffff; border:1px solid var(--line); border-radius:8px; padding:8px 12px; gap:8px;">
+        <i class="ti ti-search" style="color:var(--ink-soft);"></i>
+        <input type="text" id="admin-cust-search-input" placeholder="Search customer name, group, or territory..."
+          oninput="filterAdminCustomerList(this.value)"
+          style="border:none; outline:none; width:100%; font-size:13.5px; background:transparent;">
+      </div>
+      <div id="admin-cust-modal-list" class="admin-cust-modal-list"
+        style="display:flex; flex-direction:column; gap:8px;">
+        <div style="text-align:center;padding:24px;color:var(--ink-soft);font-size:13px;">Loading accessible
+          customers...</div>
+      </div>
     </div>
   </div>
 </div>

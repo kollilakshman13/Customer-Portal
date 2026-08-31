@@ -4,7 +4,7 @@ from frappe.utils import today, date_diff, getdate
 import base64
 
 def get_customer_for_user(user_email):
-    if user_email == "Guest":
+    if not user_email or user_email == "Guest":
         return None
         
     contacts = frappe.get_all("Contact", filters={"email_id": user_email}, fields=["name"])
@@ -21,11 +21,20 @@ def get_customer_for_user(user_email):
     if links:
         return links[0].link_name
         
-    usr_cust = frappe.db.get_value("User", user_email, "customer") or ""
-    if usr_cust:
-        return usr_cust
+    if frappe.get_meta("User").has_field("customer"):
+        usr_cust = frappe.db.get_value("User", user_email, "customer") or ""
+        if usr_cust:
+            return usr_cust
 
     return None
+
+def check_is_system_user(user=None):
+    user = user or frappe.session.user
+    if not user or user == "Guest":
+        return False
+    user_type = frappe.db.get_value("User", user, "user_type") or "Website User"
+    roles = frappe.get_roles(user)
+    return user_type == "System User" or any(r in roles for r in ["System Manager", "Administrator", "Sales User", "Sales Manager", "Support Team", "Maintenance User"])
 
 def get_website_user_home_page(user):
     if not user or user == "Guest":
@@ -35,8 +44,115 @@ def get_website_user_home_page(user):
         return "customer-portal"
     return None
 
+def get_portal_company_info(target_customer=None):
+    try:
+        import re
+        comp_name = None
+        if target_customer and frappe.db.exists("Customer", target_customer):
+            cust_meta = frappe.get_meta("Customer")
+            if cust_meta.has_field("default_company"):
+                comp_name = frappe.db.get_value("Customer", target_customer, "default_company")
+            elif cust_meta.has_field("company"):
+                comp_name = frappe.db.get_value("Customer", target_customer, "company")
+
+        if not comp_name:
+            comp_name = frappe.db.get_single_value("Global Defaults", "default_company") or frappe.defaults.get_user_default("Company")
+
+        raw_company_name = ""
+        abbr = ""
+        logo = ""
+
+        if not comp_name:
+            companies = frappe.get_all("Company", fields=["name", "company_name", "abbr"], limit=1)
+            if companies:
+                raw_company_name = companies[0].company_name or companies[0].name
+                abbr = companies[0].abbr or "NSPL"
+        elif frappe.db.exists("Company", comp_name):
+            comp = frappe.db.get_value("Company", comp_name, ["name", "company_name", "abbr", "company_logo"], as_dict=True)
+            if comp:
+                raw_company_name = comp.company_name or comp.name
+                abbr = comp.abbr or "NSPL"
+                logo = comp.company_logo or ""
+
+        if not raw_company_name:
+            raw_company_name = "64 Network Security Pvt Ltd"
+            abbr = "64 NSPL"
+
+        clean_name = re.sub(r'\s*-\s*[A-Za-z0-9\s]+$', '', raw_company_name).strip() or raw_company_name
+
+        # Calculate clean mark (max 2-3 chars, e.g. '64', 'VC', 'NS')
+        clean_abbr = re.sub(r'[^a-zA-Z0-9]', '', abbr or '')
+        mark = ""
+        if clean_abbr:
+            num_match = re.match(r'^\d+', clean_abbr)
+            if num_match:
+                mark = num_match.group(0)[:3]
+            else:
+                mark = clean_abbr[:2].upper()
+        if not mark:
+            words = [w for w in clean_name.split() if w.lower() not in ('pvt', 'ltd', 'private', 'limited', 'inc', 'corp', 'llp', '-')]
+            if len(words) >= 2:
+                mark = (words[0][0] + words[1][0]).upper()
+            else:
+                mark = clean_name[:2].upper()
+
+        return {
+            "name": comp_name or raw_company_name,
+            "company_name": raw_company_name,
+            "display_name": clean_name,
+            "abbr": abbr,
+            "mark": mark or "64",
+            "logo": logo
+        }
+    except Exception as e:
+        frappe.log_error(f"Error resolving company info: {e}", "Portal Company Info")
+
+    return {
+        "name": "64 Network Security",
+        "company_name": "64 Network Security",
+        "display_name": "64 Network Security",
+        "abbr": "64 NSPL",
+        "mark": "64",
+        "logo": ""
+    }
+
+@frappe.whitelist()
+def get_permitted_customers(search_term=None, limit=20):
+    user = frappe.session.user
+    if user == "Guest":
+        return []
+    
+    try:
+        limit = int(limit) if limit else 20
+    except Exception:
+        limit = 20
+
+    if search_term and str(search_term).strip():
+        term = str(search_term).strip()
+        st = f"%{term}%"
+        customers = frappe.get_list("Customer", 
+            filters=[["disabled", "=", 0]],
+            or_filters=[
+                ["customer_name", "like", st],
+                ["name", "like", st],
+                ["customer_group", "like", st],
+                ["territory", "like", st]
+            ],
+            fields=["name", "customer_name", "customer_group", "territory", "image", "customer_logo"],
+            order_by="customer_name asc",
+            limit=50
+        )
+    else:
+        customers = frappe.get_list("Customer", 
+            filters=[["disabled", "=", 0]], 
+            fields=["name", "customer_name", "customer_group", "territory", "image", "customer_logo"],
+            order_by="customer_name asc",
+            limit=limit
+        )
+    return customers
+
 @frappe.whitelist(allow_guest=True)
-def get_portal_data():
+def get_portal_data(customer_name=None):
     user = frappe.session.user
     if user == "Guest":
         # Load support meta options: Priorities and Types
@@ -48,8 +164,10 @@ def get_portal_data():
                 "customer_name": "Guest",
                 "gstin": "",
                 "billing_address": "",
-                "shipping_address": ""
+                "shipping_address": "",
+                "is_system_user": False
             },
+            "is_system_user": False,
             "stats": {
                 "active_licenses": 0,
                 "open_invoices_count": 0,
@@ -65,12 +183,56 @@ def get_portal_data():
                 "priorities": priorities,
                 "issue_types": issue_types
             },
-            "contacts": []
+            "contacts": [],
+            "company_info": get_portal_company_info()
         }
         
-    customer_name = get_customer_for_user(user)
-    if not customer_name:
+    user_type = frappe.db.get_value("User", user, "user_type") or "Website User"
+    roles = frappe.get_roles(user)
+    is_system_user = user_type == "System User" or any(r in roles for r in ["System Manager", "Administrator", "Sales User", "Sales Manager", "Support Team", "Maintenance User"])
+    
+    linked_customer = get_customer_for_user(user)
+
+    target_customer = None
+    if customer_name and str(customer_name).strip():
+        req_cust = str(customer_name).strip()
+        if is_system_user:
+            if not frappe.has_permission("Customer", "read", req_cust):
+                return {
+                    "error": _("Permission Denied: You do not have permission to view {0}.").format(req_cust),
+                    "permission_denied": True,
+                    "is_system_user": True,
+                    "permitted_customers": get_permitted_customers()
+                }
+            target_customer = req_cust
+        elif linked_customer and linked_customer == req_cust:
+            target_customer = linked_customer
+        else:
+            return {
+                "error": _("Permission Denied: You do not have permission to view this customer."),
+                "permission_denied": True,
+                "is_system_user": False
+            }
+    elif linked_customer:
+        target_customer = linked_customer
+    elif is_system_user:
+        permitted_customers = get_permitted_customers()
+        if not permitted_customers:
+            return {
+                "error": _("Permission Denied: No Customer records are accessible for your account."),
+                "permission_denied": True,
+                "is_system_user": True
+            }
+        return {
+            "is_system_user": True,
+            "needs_customer_selection": True,
+            "permitted_customers": permitted_customers,
+            "user_email": user
+        }
+    else:
         return {"error": _("No Customer linked to user {0}").format(user)}
+
+    customer_name = target_customer
         
     # Fetch customer details
     customer_doc = frappe.get_doc("Customer", customer_name)
@@ -138,7 +300,7 @@ def get_portal_data():
             "name", "posting_date", "due_date", "net_total", "total_taxes_and_charges", "grand_total",
             "outstanding_amount", "status", "currency", "remarks", "company",
             "customer_address", "address_display", "shipping_address_name", "shipping_address",
-            "billing_address_gstin"
+            "billing_address_gstin", "custom_zoho_invoice"
         ],
         order_by="posting_date desc")
         
@@ -449,8 +611,10 @@ def get_portal_data():
             "technical_lead_email": tl_meta["email"],
             "billing_contact": bc_meta["name"] or bc_raw,
             "billing_contact_image": bc_meta["image"],
-            "billing_contact_email": bc_meta["email"]
+            "billing_contact_email": bc_meta["email"],
+            "is_system_user": is_system_user
         },
+        "is_system_user": is_system_user,
         "stats": {
             "active_licenses": active_licenses,
             "open_invoices_count": open_invoices_count,
@@ -474,7 +638,8 @@ def get_portal_data():
         "addresses": addresses,
         "address_type_options": address_type_options,
         "gst_category_options": gst_category_options,
-        "status_options": status_options
+        "status_options": status_options,
+        "company_info": get_portal_company_info(target_customer)
     }
 
 @frappe.whitelist(allow_guest=True)
@@ -490,10 +655,14 @@ def upload_portal_attachment():
         if not frappe.db.exists("Issue", dn):
             frappe.throw(_("Ticket not found."))
         if user != "Guest":
-            customer_name = get_customer_for_user(user)
-            issue = frappe.get_doc("Issue", dn)
-            if issue.customer and issue.customer != customer_name and issue.raised_by != user:
-                frappe.throw(_("Not permitted to attach files to this ticket."), frappe.PermissionError)
+            if not check_is_system_user(user):
+                customer_name = get_customer_for_user(user)
+                issue = frappe.get_doc("Issue", dn)
+                if issue.customer and issue.customer != customer_name and issue.raised_by != user:
+                    frappe.throw(_("Not permitted to attach files to this ticket."), frappe.PermissionError)
+            else:
+                if not frappe.has_permission("Issue", "write", dn):
+                    frappe.throw(_("Not permitted to attach files to this ticket."), frappe.PermissionError)
 
     file = None
     if frappe.request and hasattr(frappe.request, "files") and frappe.request.files:
@@ -542,13 +711,17 @@ def create_support_ticket(
     description,
     priority="Medium",
     category=None,
+    query_type=None,
+    custom_query_type=None,
     department=None,
+    product_association_type=None,
     active_subscription=None,
     active_renewals=None,
     contact_email=None,
     contact_person=None,
     contacts=None,
-    attachments=None
+    attachments=None,
+    customer=None
 ):
     import json
     user = frappe.session.user
@@ -556,6 +729,13 @@ def create_support_ticket(
         frappe.throw(_("Please log in to submit a support ticket."))
         
     customer_name = get_customer_for_user(user)
+    if not customer_name and check_is_system_user(user):
+        customer_name = customer or frappe.form_dict.get("customer") or frappe.form_dict.get("customer_name")
+        if not customer_name:
+            perms = get_permitted_customers(limit=1)
+            if perms:
+                customer_name = perms[0]["name"]
+                
     if not customer_name:
         frappe.throw(_("No Customer linked to this user."))
         
@@ -602,13 +782,15 @@ def create_support_ticket(
     issue.customer_name = customer_doc.customer_name
     issue.sales_person = sales_person
     issue.raised_by = user
-    issue.contact_email = contact_email
-    if contact_name:
-        issue.contact = contact_name
-    issue.person_name = person_name
 
     if department:
         issue.department = department
+
+    if product_association_type:
+        if issue.meta.has_field("product_association_type"):
+            issue.product_association_type = product_association_type
+        elif issue.meta.has_field("custom_product_association_type"):
+            issue.custom_product_association_type = product_association_type
 
     if active_subscription:
         issue.active_subscription = active_subscription
@@ -700,24 +882,26 @@ def create_support_ticket(
         db_priority = priority or "Medium"
     issue.priority = db_priority
     
-    query_type = category or ""
-    if query_type:
-        issue.custom_query_type = query_type
-        if frappe.db.exists("Issue Type", query_type):
-            issue.issue_type = query_type
-        else:
-            issue.issue_type = "Other"
-    else:
-        issue.issue_type = "Other"
+    # Query Type strictly mapped to custom_query_type
+    resolved_query_type = custom_query_type or query_type or category or ""
+    if resolved_query_type:
+        if issue.meta.has_field("custom_query_type"):
+            issue.custom_query_type = resolved_query_type
+        elif issue.meta.has_field("query_type"):
+            issue.query_type = resolved_query_type
         
     issue.raised_via_channel = "Customer Portal"
     issue.via_customer_portal = 1
+    issue.flags.mute_emails = True
+    issue.flags.ignore_notifications = True
     issue.flags.create_communication = False
     issue.flags.ignore_permissions = True
     issue.flags.ignore_version = True
     issue.flags.ignore_links = True
 
+    prev_mute_emails = getattr(frappe.flags, "mute_emails", False)
     try:
+        frappe.flags.mute_emails = True
         issue.insert(ignore_permissions=True)
     except frappe.exceptions.TimestampMismatchError:
         pass
@@ -727,6 +911,26 @@ def create_support_ticket(
             issue.insert(ignore_permissions=True)
         except Exception:
             pass
+    finally:
+        frappe.flags.mute_emails = prev_mute_emails
+
+    # Explicitly sync contact fields directly to DB after insertion (prevents triggering on_insert notification hooks)
+    fields_to_sync = {
+        "person_name": person_name,
+        "contact_email": contact_email,
+        "contact": contact_name
+    }
+    for fld, val in fields_to_sync.items():
+        if val and str(val).strip():
+            try:
+                frappe.db.set_value("Issue", issue.name, fld, str(val).strip(), update_modified=False)
+                setattr(issue, fld, str(val).strip())
+            except Exception as ex:
+                frappe.log_error(f"Error setting field {fld}: {ex}")
+
+    # Safety check: ensure no email queue or automated communication was created for this portal ticket
+    frappe.db.sql("DELETE FROM `tabEmail Queue` WHERE reference_doctype = 'Issue' AND reference_name = %s", issue.name)
+    frappe.db.sql("DELETE FROM `tabCommunication` WHERE reference_doctype = 'Issue' AND reference_name = %s AND communication_type = 'Automated Message'", issue.name)
 
     frappe.db.commit()
     
@@ -974,6 +1178,21 @@ def download_invoice_pdf(invoice_name, print_format=None):
             )
             print_format = formats[0].name if formats else "Standard"
 
+    doc = frappe.get_doc("Sales Invoice", invoice_name)
+    if doc.get("custom_zoho_invoice"):
+        from frappe.utils.file_manager import get_file
+        try:
+            fname, content = get_file(doc.custom_zoho_invoice)
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            pdf_b64 = base64.b64encode(content).decode("utf-8")
+            return {
+                "pdf_b64": pdf_b64,
+                "filename": fname or f"{invoice_name}.pdf"
+            }
+        except Exception as e:
+            frappe.log_error(f"Error loading custom zoho invoice for {invoice_name}: {e}", "Portal Invoice Zoho File Error")
+
     # Set flag so get_rendered_template skips its own permission check
     # (ownership was already validated above using the DB check)
     frappe.flags.ignore_print_permissions = True
@@ -981,7 +1200,6 @@ def download_invoice_pdf(invoice_name, print_format=None):
         from frappe.www.printview import get_rendered_template, get_print_format_doc
         from frappe.utils.pdf import get_pdf
 
-        doc = frappe.get_doc("Sales Invoice", invoice_name)
         print_format_doc = get_print_format_doc(print_format, meta=doc.meta)
 
         html = get_rendered_template(
@@ -1016,11 +1234,15 @@ def get_ticket_details(ticket_name):
     frappe.clear_document_cache("Issue", ticket_name)
     issue = frappe.get_doc("Issue", ticket_name)
     
-    # Permission check: guest or user must be linked to customer or raised by
+    # Permission check: guest or user must be linked to customer or raised by OR have permission on Issue
     if user != "Guest":
-        customer_name = get_customer_for_user(user)
-        if issue.customer and issue.customer != customer_name and issue.raised_by != user:
-            frappe.throw(_("Not permitted"), frappe.PermissionError)
+        if check_is_system_user(user):
+            if not frappe.has_permission("Issue", "read", issue):
+                frappe.throw(_("Not permitted"), frappe.PermissionError)
+        else:
+            customer_name = get_customer_for_user(user)
+            if issue.customer and issue.customer != customer_name and issue.raised_by != user:
+                frappe.throw(_("Not permitted"), frappe.PermissionError)
             
     # Helper for user details
     def resolve_user_meta(uid):
@@ -1220,17 +1442,25 @@ def get_ticket_details(ticket_name):
         if fname and furl:
             att_map[fname] = furl
 
-    # Filter activity for customer portal visibility (exclude internal notes and internal agent system logs)
+    # Filter activity for customer portal visibility (exclude internal notes, internal agent system logs, and redundant initial description)
     customer_activity = []
+    issue_desc_clean = frappe.utils.strip_html_tags(issue.get("description") or "").strip()
     allowed_types = {"Comment", "Communication", "Status Change", "Created", "Document Created", "File Attached", "Attachment", "Info Added", "Resolution"}
+    
     for act in raw_activity:
         act_type = act.get("type") or ""
         desc = (act.get("description") or "").strip()
+        desc_clean = frappe.utils.strip_html_tags(desc).strip()
         
         # Exclude internal notes or hidden internal activity
         if act_type in allowed_types or "Status" in act_type:
             if "[Internal" in desc or "[Private]" in desc or act_type == "Internal Note":
                 continue
+
+            # Exclude initial ticket description from activity feed (since it's already shown in Overview)
+            if act_type in ("Communication", "Customer Message") and act.get("sent_or_received") != "Sent":
+                if desc_clean == issue_desc_clean or not act.get("recipients"):
+                    continue
 
             # Enrich plain text file references with clickable HTML links
             if att_map and desc:
@@ -1294,34 +1524,21 @@ def get_ticket_details(ticket_name):
     if raw_assign:
         try:
             import json
-            parsed = json.loads(raw_assign) if isinstance(raw_assign, str) else raw_assign
-            if isinstance(parsed, list):
-                assignees = parsed
-        except Exception:
-            assignees = []
-
-    if not assignees:
-        try:
-            assignees = frappe.get_all("ToDo", filters={
-                "reference_type": "Issue",
-                "reference_name": ticket_name,
-                "status": "Open"
-            }, pluck="allocated_to", ignore_permissions=True)
+            assignees = json.loads(raw_assign) if isinstance(raw_assign, str) else raw_assign
         except Exception:
             assignees = []
 
     assignees_details = []
-    if assignees:
-        for u_id in assignees:
-            if u_id:
-                u_info = frappe.db.get_value("User", u_id, ["name", "full_name", "user_image", "email"], as_dict=True)
-                if u_info:
-                    assignees_details.append({
-                        "name": u_info.name,
-                        "full_name": u_info.full_name or u_info.name,
-                        "user_image": u_info.user_image or "",
-                        "email": u_info.email or u_info.name
-                    })
+    for u_id in assignees:
+        if u_id:
+            u_info = frappe.db.get_value("User", u_id, ["name", "full_name", "user_image", "email"], as_dict=True)
+            if u_info:
+                assignees_details.append({
+                    "name": u_info.name,
+                    "full_name": u_info.full_name or u_info.name,
+                    "user_image": u_info.user_image or "",
+                    "email": u_info.email or u_info.name
+                })
 
     res_details = issue.get("resolution_details") or issue.get("resolution") or ""
     
@@ -1334,32 +1551,51 @@ def get_ticket_details(ticket_name):
                 filters=[
                     ["reference_doctype", "=", "Issue"],
                     ["reference_name", "=", ticket_name],
-                    ["communication_type", "in", ["Communication", "Automated Message"]]
+                    ["communication_type", "in", ["Communication", "Automated Message"]],
+                    ["sent_or_received", "=", "Sent"]
                 ],
-                fields=["name", "subject", "recipients", "cc", "bcc", "creation", "delivery_status", "sender", "content"],
+                fields=["name", "subject", "recipients", "cc", "bcc", "creation", "delivery_status", "sender", "content", "sent_or_received"],
                 order_by="creation desc",
                 ignore_permissions=True
             )
             for c in comms:
-                st = (c.get("delivery_status") or "Sent").capitalize()
-                is_sent = st in ("Sent", "Delivered", "Read", "Completed")
-                email_logs.append({
-                    "name": c.name,
-                    "subject": c.subject or f"Ticket No: {ticket_name}",
-                    "status": "sent" if is_sent else "fail",
-                    "status_text": st if st else "Sent",
-                    "creation": str(c.creation),
-                    "recipients": c.recipients or "N/A",
-                    "sender": c.sender or "",
-                    "cc": c.get("cc") or "",
-                    "bcc": c.get("bcc") or "",
-                    "content": c.content or ""
-                })
+                if c.get("recipients") and c.get("recipients") != "N/A":
+                    st = (c.get("delivery_status") or "Sent").capitalize()
+                    is_sent = st in ("Sent", "Delivered", "Read", "Completed")
+                    email_logs.append({
+                        "name": c.name,
+                        "subject": c.subject or f"Ticket No: {ticket_name}",
+                        "status": "sent" if is_sent else "fail",
+                        "status_text": st if st else "Sent",
+                        "creation": str(c.creation),
+                        "recipients": c.recipients or "N/A",
+                        "sender": c.sender or "",
+                        "cc": c.get("cc") or "",
+                        "bcc": c.get("bcc") or "",
+                        "content": c.content or ""
+                    })
     except Exception as e:
         frappe.log_error(f"Error fetching email logs for issue {ticket_name}: {e}", "Portal Ticket Details")
 
+    def is_internal_or_system_comment(text, sender=""):
+        if not text:
+            return True
+        lower_text = text.lower()
+        if "[internal" in lower_text or "[private]" in lower_text or "[system]" in lower_text:
+            return True
+        if "escalated to" in lower_text and ("sla" in lower_text or "threshold" in lower_text or "assigned:" in lower_text or "support" in lower_text):
+            return True
+        if "sla response breach" in lower_text or "sla resolution breach" in lower_text or "breach threshold" in lower_text:
+            return True
+        if "initial assignment to creator" in lower_text or "assigned to creator" in lower_text:
+            return True
+        if sender == "Administrator" and ("escalated" in lower_text or "assigned" in lower_text or "sla" in lower_text):
+            return True
+        return False
+
     comments_list = []
     try:
+        # 1. Fetch from Comment doctype (Public user comments)
         if frappe.db.exists("DocType", "Comment"):
             raw_comments = frappe.get_all("Comment",
                 filters={"reference_doctype": "Issue", "reference_name": ticket_name, "comment_type": "Comment"},
@@ -1368,14 +1604,62 @@ def get_ticket_details(ticket_name):
                 ignore_permissions=True
             )
             for cm in raw_comments:
-                user_meta = resolve_user_meta(cm.comment_email or cm.comment_by)
+                content_str = (cm.content or "").strip()
+                sender_val = cm.comment_email or cm.comment_by or ""
+                if is_internal_or_system_comment(content_str, sender_val):
+                    continue
+                user_meta = resolve_user_meta(sender_val)
                 comments_list.append({
                     "name": cm.name,
-                    "sender": cm.comment_email or cm.comment_by,
+                    "sender": sender_val,
                     "sender_full_name": user_meta.get("full_name") or cm.comment_by or "User",
-                    "content": cm.content or "",
-                    "creation": str(cm.creation)
+                    "content": content_str,
+                    "creation": str(cm.creation),
+                    "timestamp": str(cm.creation)
                 })
+
+        # 2. Fetch from Communication doctype (System user & Agent replies)
+        if frappe.db.exists("DocType", "Communication"):
+            raw_comms = frappe.get_all("Communication",
+                filters={
+                    "reference_doctype": "Issue",
+                    "reference_name": ticket_name,
+                    "communication_type": ["in", ["Communication", "Comment", "Feedback"]]
+                },
+                fields=["name", "sender", "sender_full_name", "content", "creation", "subject", "sent_or_received"],
+                order_by="creation asc",
+                ignore_permissions=True
+            )
+            for cm in raw_comms:
+                content_str = (cm.content or "").strip()
+                if is_internal_or_system_comment(content_str, cm.sender):
+                    continue
+                # Exclude automated system email notification templates
+                subj = (cm.get("subject") or "").lower()
+                if "your ticket has been created" in subj or "notification sent to" in subj:
+                    continue
+                if "<table" in content_str or "<!doctype" in content_str.lower() or "<html" in content_str.lower():
+                    continue
+
+                content_clean = frappe.utils.strip_html_tags(content_str).strip()
+                if content_clean == issue_desc_clean and cm.get("sent_or_received") != "Sent":
+                    continue
+                if any(existing.get("name") == cm.name or existing.get("content") == content_str for existing in comments_list):
+                    continue
+
+                user_meta = resolve_user_meta(cm.sender)
+                sender_name = cm.sender_full_name or user_meta.get("full_name") or cm.sender or "Support Team"
+                comments_list.append({
+                    "name": cm.name,
+                    "sender": cm.sender,
+                    "sender_full_name": sender_name,
+                    "content": content_str,
+                    "creation": str(cm.creation),
+                    "timestamp": str(cm.creation)
+                })
+
+        # Sort all conversation messages chronologically
+        comments_list.sort(key=lambda x: str(x.get("creation") or ""))
     except Exception as e:
         frappe.log_error(f"Error fetching comments for issue {ticket_name}: {e}", "Portal Ticket Details")
 
@@ -1443,9 +1727,13 @@ def add_ticket_reply(ticket_name, comment_text, attachments=None):
         frappe.throw(_("Ticket not found."))
         
     issue = frappe.get_doc("Issue", ticket_name)
-    customer_name = get_customer_for_user(user)
-    if issue.customer and issue.customer != customer_name and issue.raised_by != user:
-        frappe.throw(_("Not permitted to modify this ticket."), frappe.PermissionError)
+    if not check_is_system_user(user):
+        customer_name = get_customer_for_user(user)
+        if issue.customer and issue.customer != customer_name and issue.raised_by != user:
+            frappe.throw(_("Not permitted to modify this ticket."), frappe.PermissionError)
+    else:
+        if not frappe.has_permission("Issue", "write", issue):
+            frappe.throw(_("Not permitted to modify this ticket."), frappe.PermissionError)
         
     reply_html = comment_text.strip()
     
@@ -1513,22 +1801,26 @@ def get_contact_detail(contact_id):
     if user == "Guest":
         frappe.throw(_("Authentication required."))
 
-    customer_name = get_customer_for_user(user)
-    if not customer_name:
-        frappe.throw(_("No Customer linked to user."))
-
     if not frappe.db.exists("Contact", contact_id):
         frappe.throw(_("Contact not found."))
 
-    links = frappe.get_all("Dynamic Link", filters={
-        "parenttype": "Contact",
-        "parent": contact_id,
-        "link_doctype": "Customer",
-        "link_name": customer_name
-    })
-    comp = frappe.db.get_value("Contact", contact_id, "company_name")
-    if not links and comp != customer_name:
-        frappe.throw(_("Permission denied to view this contact."))
+    if check_is_system_user(user):
+        if not frappe.has_permission("Contact", "read", contact_id):
+            frappe.throw(_("Permission denied to view this contact."))
+    else:
+        customer_name = get_customer_for_user(user)
+        if not customer_name:
+            frappe.throw(_("No Customer linked to user."))
+
+        links = frappe.get_all("Dynamic Link", filters={
+            "parenttype": "Contact",
+            "parent": contact_id,
+            "link_doctype": "Customer",
+            "link_name": customer_name
+        })
+        comp = frappe.db.get_value("Contact", contact_id, "company_name")
+        if not links and comp != customer_name:
+            frappe.throw(_("Permission denied to view this contact."))
 
     doc = frappe.get_doc("Contact", contact_id)
     contact_dict = doc.as_dict()

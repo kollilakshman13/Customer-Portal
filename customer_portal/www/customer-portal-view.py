@@ -8,4 +8,5 @@ def get_context(context):
         context.customer_name = "Guest"
     else:
         context.customer_name = get_customer_for_user(user)
+    context.title = "Overview - 64 NSPL"
     context.full_width = True
