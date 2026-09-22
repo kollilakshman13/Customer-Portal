@@ -1737,6 +1737,15 @@ function renderContactDetails(contacts, fallbackName, fallbackEmail) {
                     cel('i', { class: 'ti ti-phone' }),
                     cel('span', { textContent: c.mobile_no })
                 ]) : null,
+                (c.has_portal_access === 1 || c.has_portal_access === true || c.portal_access === 1 || c.portal_access === true) ? cel('div', { class: 'pf-contact-meta', style: 'margin-top:4px;' }, [
+                    cel('span', {
+                        class: 'portal-access-badge',
+                        style: 'display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#059669;background:#ecfdf5;border:1px solid #a7f3d0;padding:2px 8px;border-radius:6px;'
+                    }, [
+                        cel('i', { class: 'ti ti-shield-check', style: 'font-size:13px;color:#059669;' }),
+                        cel('span', { textContent: 'Portal Access Active' })
+                    ])
+                ]) : null,
                 c.is_primary ? cel('div', { style: 'margin-top:4px;' }, [
                     cel('span', { class: 'tpoc-badge', textContent: 'TPOC' })
                 ]) : null
@@ -2876,6 +2885,43 @@ function renderPaginatedList(pageName) {
     }
 }
 
+function getRenewalSearchableText(ren) {
+    if (!ren || typeof ren !== 'object') return '';
+    const tokens = [];
+
+    function extract(val) {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            tokens.push(String(val));
+            return;
+        }
+        if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) {
+                extract(val[i]);
+            }
+            return;
+        }
+        if (typeof val === 'object') {
+            for (const k of Object.keys(val)) {
+                if (typeof val[k] === 'function') continue;
+                extract(val[k]);
+            }
+        }
+    }
+
+    extract(ren);
+
+    try {
+        if (ren.status) tokens.push(ren.status);
+        if (ren.start_date) tokens.push(formatDate(ren.start_date));
+        if (ren.end_date) tokens.push(formatDate(ren.end_date));
+        if (ren.total_amount != null) tokens.push(formatCurrency(ren.total_amount));
+        if (ren.rate != null) tokens.push(formatCurrency(ren.rate));
+    } catch (e) {}
+
+    return tokens.join(' ').replace(/<[^>]*>/g, ' ').toLowerCase();
+}
+
 function filterRenewals(resetLimit = true) {
     if (!portalData) return;
 
@@ -2895,12 +2941,11 @@ function filterRenewals(resetLimit = true) {
         filtered = filtered.filter(ren => ren.status === status);
     }
     if (query) {
-        filtered = filtered.filter(ren =>
-            (ren.name && ren.name.toLowerCase().includes(query)) ||
-            (ren.product_name && ren.product_name.toLowerCase().includes(query)) ||
-            (ren.invoice_no && ren.invoice_no.toLowerCase().includes(query)) ||
-            (ren.domain_name && ren.domain_name.toLowerCase().includes(query))
-        );
+        const terms = query.split(/\s+/).filter(Boolean);
+        filtered = filtered.filter(ren => {
+            const fullText = getRenewalSearchableText(ren);
+            return terms.every(term => fullText.includes(term));
+        });
     }
 
     state.data = filtered;
@@ -2933,6 +2978,45 @@ function filterOrders(resetLimit = true) {
     renderPaginatedList('orders');
 }
 
+function getInvoiceSearchableText(inv) {
+    if (!inv || typeof inv !== 'object') return '';
+    const tokens = [];
+
+    function extract(val) {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            tokens.push(String(val));
+            return;
+        }
+        if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) {
+                extract(val[i]);
+            }
+            return;
+        }
+        if (typeof val === 'object') {
+            for (const k of Object.keys(val)) {
+                if (typeof val[k] === 'function') continue;
+                extract(val[k]);
+            }
+        }
+    }
+
+    extract(inv);
+
+    try {
+        if (inv.status) tokens.push(inv.status);
+        if (inv.posting_date) tokens.push(formatDate(inv.posting_date));
+        if (inv.due_date) tokens.push(formatDate(inv.due_date));
+        if (inv.grand_total != null) tokens.push(formatCurrency(inv.grand_total));
+        if (inv.outstanding_amount != null) tokens.push(formatCurrency(inv.outstanding_amount));
+        if (inv.net_total != null) tokens.push(formatCurrency(inv.net_total));
+        if (inv.total_taxes_and_charges != null) tokens.push(formatCurrency(inv.total_taxes_and_charges));
+    } catch (e) {}
+
+    return tokens.join(' ').replace(/<[^>]*>/g, ' ').toLowerCase();
+}
+
 function filterInvoices(resetLimit = true) {
     if (!portalData) return;
 
@@ -2954,11 +3038,52 @@ function filterInvoices(resetLimit = true) {
         filtered = filtered.filter(inv => inv.status === status);
     }
     if (query) {
-        filtered = filtered.filter(inv => inv.name.toLowerCase().includes(query));
+        const terms = query.split(/\s+/).filter(Boolean);
+        filtered = filtered.filter(inv => {
+            const fullText = getInvoiceSearchableText(inv);
+            return terms.every(term => fullText.includes(term));
+        });
     }
 
     state.data = filtered;
     renderPaginatedList('invoices');
+}
+
+function getTicketSearchableText(ticket) {
+    if (!ticket || typeof ticket !== 'object') return '';
+    const tokens = [];
+
+    function extract(val) {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            tokens.push(String(val));
+            return;
+        }
+        if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) {
+                extract(val[i]);
+            }
+            return;
+        }
+        if (typeof val === 'object') {
+            for (const k of Object.keys(val)) {
+                if (typeof val[k] === 'function') continue;
+                extract(val[k]);
+            }
+        }
+    }
+
+    extract(ticket);
+
+    try {
+        if (ticket.status) tokens.push(ticket.status);
+        if (ticket.creation) tokens.push(formatDate(ticket.creation));
+        if (ticket.modified) tokens.push(formatDate(ticket.modified));
+        if (ticket.resolution_by) tokens.push(formatDate(ticket.resolution_by));
+        if (ticket.response_by) tokens.push(formatDate(ticket.response_by));
+    } catch (e) {}
+
+    return tokens.join(' ').replace(/<[^>]*>/g, ' ').toLowerCase();
 }
 
 function filterTickets() {
@@ -2975,11 +3100,11 @@ function filterTickets() {
         filtered = filtered.filter(t => t.status === status);
     }
     if (query) {
-        filtered = filtered.filter(t =>
-            t.name.toLowerCase().includes(query) ||
-            (t.subject && t.subject.toLowerCase().includes(query)) ||
-            (t.raised_by && t.raised_by.toLowerCase().includes(query))
-        );
+        const terms = query.split(/\s+/).filter(Boolean);
+        filtered = filtered.filter(t => {
+            const fullText = getTicketSearchableText(t);
+            return terms.every(term => fullText.includes(term));
+        });
     }
 
     state.data = filtered;
@@ -4489,7 +4614,11 @@ function submitTicket() {
         btn.innerHTML = '<i class="ti ti-loader spin"></i> Submitting Ticket...';
     }
 
-    const attachmentUrls = cpUploadedFiles.map(f => f.file_url);
+    const attachmentsPayload = cpUploadedFiles.map(f => ({
+        name: f.name,
+        file_name: f.file_name,
+        file_url: f.file_url
+    }));
 
     frappe.call({
         method: "customer_portal.api-customer-portal-view.create_support_ticket",
@@ -4502,7 +4631,7 @@ function submitTicket() {
             active_subscription: activeSubStr,
             contact_person: contactPersonStr,
             contacts: JSON.stringify(contactsPayload),
-            attachments: attachmentUrls
+            attachments: attachmentsPayload
         },
         callback: function (r) {
             if (btn) {

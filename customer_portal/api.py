@@ -151,41 +151,12 @@ def get_permitted_customers(search_term=None, limit=20):
         )
     return customers
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_portal_data(customer_name=None):
     user = frappe.session.user
-    if user == "Guest":
-        # Load support meta options: Priorities and Types
-        priorities = [p.name for p in frappe.get_all("Issue Priority", fields=["name"])]
-        issue_types = [t.name for t in frappe.get_all("Issue Type", fields=["name"])]
-        return {
-            "customer_info": {
-                "name": "",
-                "customer_name": "Guest",
-                "gstin": "",
-                "billing_address": "",
-                "shipping_address": "",
-                "is_system_user": False
-            },
-            "is_system_user": False,
-            "stats": {
-                "active_licenses": 0,
-                "open_invoices_count": 0,
-                "open_invoices_amount": 0,
-                "open_tickets": 0,
-                "next_renewal_days": None
-            },
-            "renewals": [],
-            "invoices": [],
-            "orders": [],
-            "support": {
-                "tickets": [],
-                "priorities": priorities,
-                "issue_types": issue_types
-            },
-            "contacts": [],
-            "company_info": get_portal_company_info()
-        }
+    if not user or user == "Guest":
+        frappe.throw(_("Please login to access the Customer Portal"), frappe.AuthenticationError)
+
         
     user_type = frappe.db.get_value("User", user, "user_type") or "Website User"
     roles = frappe.get_roles(user)
@@ -234,13 +205,27 @@ def get_portal_data(customer_name=None):
 
     customer_name = target_customer
         
-    # Fetch customer details
-    customer_doc = frappe.get_doc("Customer", customer_name)
+    # Fetch customer details efficiently without loading full heavy DocType
+    cust_fields = [
+        "name", "customer_name", "gstin", "primary_address",
+        "account_manager", "sales_person", "technical_lead", "billing_contact",
+        "image", "customer_logo", "av_coverage", "custom_av_coverage"
+    ]
+    cust_meta = frappe.get_meta("Customer")
+    valid_cust_fields = [f for f in cust_fields if f == "name" or cust_meta.has_field(f)]
+    customer_doc = frappe.db.get_value("Customer", customer_name, valid_cust_fields, as_dict=True) or {}
+    if not customer_doc.get("name"):
+        customer_doc["name"] = customer_name
+        customer_doc["customer_name"] = customer_name
     
-    # Fetch billing address and GSTIN
+    # Fetch billing address and GSTIN with lean field list
+    address_fields = [
+        "name", "address_title", "address_type", "address_line1", "address_line2",
+        "city", "state", "pincode", "country", "gstin", "is_primary_address", "is_shipping_address"
+    ]
     addresses = frappe.get_all("Address", 
         filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", customer_name]], 
-        fields=["*"])
+        fields=address_fields)
     
     billing_address = ""
     shipping_address = ""
@@ -267,31 +252,46 @@ def get_portal_data(customer_name=None):
         shipping_address = billing_address
         shipping_gstin = gstin
         
-    # Fetch Contacts with TPOC & Image fields
+    # Fetch Contacts with TPOC, Image & Portal Access fields
     contact_fields = ["name", "first_name", "last_name", "email_id", "phone", "mobile_no", "is_primary_contact", "designation"]
     contact_meta = frappe.get_meta("Contact")
-    if contact_meta.has_field("tpoc"):
-        contact_fields.append("tpoc")
-    if contact_meta.has_field("custom_tpoc"):
-        contact_fields.append("custom_tpoc")
-    if contact_meta.has_field("image"):
-        contact_fields.append("image")
-    if contact_meta.has_field("custom_image"):
-        contact_fields.append("custom_image")
-    if contact_meta.has_field("user_image"):
-        contact_fields.append("user_image")
+    for f in ["tpoc", "custom_tpoc", "image", "custom_image", "user_image", "user", "portal_access", "has_portal_access", "custom_portal_access"]:
+        if contact_meta.has_field(f):
+            contact_fields.append(f)
 
     contacts = frappe.get_all("Contact", 
         filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", customer_name]], 
         fields=contact_fields)
 
+    # Resolve linked Users & Portal Access for contacts strictly by their email_id
+    contact_emails = list(set([str(c.email_id).strip().lower() for c in contacts if c.get("email_id") and str(c.email_id).strip()]))
+    linked_users_map = {}
+    if contact_emails:
+        user_list = frappe.get_all("User",
+            filters={"email": ["in", contact_emails], "enabled": 1},
+            fields=["name", "email", "user_image", "user_type", "enabled"])
+        for u in user_list:
+            u_email = (u.email or u.name or "").strip().lower()
+            if u_email:
+                linked_users_map[u_email] = u
+            if u.name:
+                linked_users_map[u.name.strip().lower()] = u
+
     for c in contacts:
         if c.get("custom_tpoc") and not c.get("tpoc"):
             c["tpoc"] = c["custom_tpoc"]
-        if not c.get("image") and c.get("email_id"):
-            u_img = frappe.db.get_value("User", c["email_id"], "user_image")
-            if u_img:
-                c["image"] = u_img
+        
+        c_email = str(c.get("email_id") or "").strip().lower()
+        matched_user = linked_users_map.get(c_email) if c_email else None
+
+        # Contact ONLY has portal access if their own email exists as an active enabled User account
+        has_portal = bool(matched_user and matched_user.get("enabled"))
+
+        c["has_portal_access"] = 1 if has_portal else 0
+        c["portal_access"] = 1 if has_portal else 0
+
+        if not c.get("image") and matched_user and matched_user.get("user_image"):
+            c["image"] = matched_user["user_image"]
         
     # Fetch Invoices (Sales Invoice)
     invoices = frappe.get_all("Sales Invoice", 
@@ -300,7 +300,7 @@ def get_portal_data(customer_name=None):
             "name", "posting_date", "due_date", "net_total", "total_taxes_and_charges", "grand_total",
             "outstanding_amount", "status", "currency", "remarks", "company",
             "customer_address", "address_display", "shipping_address_name", "shipping_address",
-            "billing_address_gstin", "custom_zoho_invoice"
+            "billing_address_gstin", "custom_zoho_invoice", "po_no", "po_date", "customer_name"
         ],
         order_by="posting_date desc")
         
@@ -308,7 +308,7 @@ def get_portal_data(customer_name=None):
         inv_names = [inv.name for inv in invoices]
         inv_items = frappe.get_all("Sales Invoice Item",
             filters={"parent": ["in", inv_names]},
-            fields=["parent", "item_code", "item_name", "description", "qty", "rate", "amount"])
+            fields=["parent", "item_code", "item_name", "description", "qty", "rate", "amount", "item_group", "brand", "uom", "serial_no", "batch_no", "sales_order", "gst_hsn_code"])
         inv_items_map = {}
         for item in inv_items:
             inv_items_map.setdefault(item.parent, []).append(item)
@@ -352,19 +352,43 @@ def get_portal_data(customer_name=None):
             "name", "subject", "status", "creation", "modified", "raised_by", "sales_person",
             "priority", "description", "issue_type", "custom_query_type", "custom_support_type", "contact_email",
             "resolution_details", "resolution_by", "sla_resolution_by", "agreement_status",
-            "working_agent", "response_by"
+            "working_agent", "response_by", "customer_name", "company"
         ],
         order_by="creation desc")
         
     user_map = {}
-    for iss in issues:
-        agent = iss.get("working_agent")
-        if agent:
-            if agent not in user_map:
-                user_map[agent] = frappe.db.get_value("User", agent, "full_name") or agent
-            iss["working_agent_name"] = user_map[agent]
-        else:
-            iss["working_agent_name"] = "-"
+    if issues:
+        iss_names = [iss.name for iss in issues]
+        tkt_ren_map = {}
+        try:
+            tkt_ren_list = frappe.get_all("Active Renewals",
+                filters={"parent": ["in", iss_names]},
+                fields=["parent", "item", "item_name", "start_date", "end_date", "quantity", "amount", "renewal_id"])
+            for r in tkt_ren_list:
+                tkt_ren_map.setdefault(r.parent, []).append(r)
+        except Exception:
+            pass
+
+        tkt_contacts_map = {}
+        try:
+            tkt_contacts_list = frappe.get_all("Issue Contact List",
+                filters={"parent": ["in", iss_names]},
+                fields=["parent", "user_name", "mobile_no", "email_id", "designation", "tpoc"])
+            for c in tkt_contacts_list:
+                tkt_contacts_map.setdefault(c.parent, []).append(c)
+        except Exception:
+            pass
+
+        for iss in issues:
+            iss["active_renewals"] = tkt_ren_map.get(iss.name, [])
+            iss["contacts"] = tkt_contacts_map.get(iss.name, [])
+            agent = iss.get("working_agent")
+            if agent:
+                if agent not in user_map:
+                    user_map[agent] = frappe.db.get_value("User", agent, "full_name") or agent
+                iss["working_agent_name"] = user_map[agent]
+            else:
+                iss["working_agent_name"] = "-"
         
     # Fetch Renewals (from Renewal List)
     renewals = frappe.get_all("Renewal List", 
@@ -374,7 +398,7 @@ def get_portal_data(customer_name=None):
             "start_date", "end_date", "status", "total_amount",
             "renewal_owner", "sales_user", "sales_team", "company",
             "rate", "domain_name", "description", "note",
-            "serial_nos", "opportunity_id",
+            "serial_nos", "opportunity_id", "subject", "sla", "sla_product", "sla_type", "tickets"
         ],
         order_by="end_date desc")
         
@@ -383,7 +407,7 @@ def get_portal_data(customer_name=None):
         ren_names = [r.name for r in renewals]
         items_list = frappe.get_all("Renewal Item",
             filters={"parent": ["in", ren_names]},
-            fields=["parent", "item_code", "item_name", "item_brand", "brand", "item_group", "image", "qty", "rate", "amount", "start_date", "end_date", "description", "status"])
+            fields=["parent", "item_code", "item_name", "item_brand", "brand", "item_group", "image", "qty", "rate", "amount", "start_date", "end_date", "description", "status", "serial_no", "batch_no", "invoice_no", "uom"])
         
         item_codes = list(set([i.item_code for i in items_list if i.get("item_code")]))
         item_meta_map = {}
@@ -395,13 +419,18 @@ def get_portal_data(customer_name=None):
 
         brand_image_map = {}
         try:
-            if frappe.db.exists("DocType", "Brand"):
+            brand_cache_key = "portal_brand_image_map"
+            cached_brands = frappe.cache().get_value(brand_cache_key)
+            if cached_brands is not None:
+                brand_image_map = cached_brands
+            elif frappe.db.exists("DocType", "Brand"):
                 all_brands = frappe.get_all("Brand", fields=["name", "brand", "image"])
                 for b in all_brands:
                     b_name = (b.get("brand") or b.get("name") or "").strip()
                     if b_name:
                         brand_image_map[b_name.lower()] = b.get("image") or ""
                         brand_image_map[b.get("name").lower()] = b.get("image") or ""
+                frappe.cache().set_value(brand_cache_key, brand_image_map, expires_in_sec=3600)
         except Exception:
             pass
 
@@ -494,35 +523,63 @@ def get_portal_data(customer_name=None):
         upcoming_renewals.sort(key=lambda x: getdate(x.end_date))
         next_renewal_days = date_diff(upcoming_renewals[0].end_date, today())
         
-    # Load support meta options: Priorities and Types
-    priorities = [p.name for p in frappe.get_all("Issue Priority", fields=["name"])]
-    issue_types = [t.name for t in frappe.get_all("Issue Type", fields=["name"])]
-
-    # Load DocType status metadata options dynamically
-    def get_field_status_options(doctype_name, fieldname="status"):
+    # Load support meta options & DocType status options with Redis caching
+    def get_cached_portal_meta():
+        cache_key = "portal_static_meta_options"
         try:
-            meta = frappe.get_meta(doctype_name)
-            field = meta.get_field(fieldname)
-            if field and field.options:
-                return [s.strip() for s in field.options.split("\n") if s.strip()]
+            cached = frappe.cache().get_value(cache_key)
+            if cached:
+                return cached
         except Exception:
             pass
-        return []
 
-    status_options = {
-        "renewals": get_field_status_options("Renewal List"),
-        "invoices": get_field_status_options("Sales Invoice"),
-        "orders": get_field_status_options("Sales Order"),
-        "support": get_field_status_options("Issue")
-    }
+        priorities = [p.name for p in frappe.get_all("Issue Priority", fields=["name"])]
+        issue_types = [t.name for t in frappe.get_all("Issue Type", fields=["name"])]
 
-    address_type_options = get_field_status_options("Address", "address_type")
-    if not address_type_options:
-        address_type_options = ["Billing", "Shipping", "Office", "Plant", "Warehouse", "Personal", "Postal", "Sub-contracting", "Subsidiary", "Others"]
+        def get_field_status_options(doctype_name, fieldname="status"):
+            try:
+                meta = frappe.get_meta(doctype_name)
+                field = meta.get_field(fieldname)
+                if field and field.options:
+                    return [s.strip() for s in field.options.split("\n") if s.strip()]
+            except Exception:
+                pass
+            return []
 
-    gst_category_options = get_field_status_options("Address", "gst_category")
-    if not gst_category_options:
-        gst_category_options = ["Registered Regular", "Registered Composition", "Unregistered", "SEZ", "Overseas", "Deemed Export", "UIN Holders", "Tax Deductor"]
+        status_options = {
+            "renewals": get_field_status_options("Renewal List"),
+            "invoices": get_field_status_options("Sales Invoice"),
+            "orders": get_field_status_options("Sales Order"),
+            "support": get_field_status_options("Issue")
+        }
+
+        address_type_options = get_field_status_options("Address", "address_type")
+        if not address_type_options:
+            address_type_options = ["Billing", "Shipping", "Office", "Plant", "Warehouse", "Personal", "Postal", "Sub-contracting", "Subsidiary", "Others"]
+
+        gst_category_options = get_field_status_options("Address", "gst_category")
+        if not gst_category_options:
+            gst_category_options = ["Registered Regular", "Registered Composition", "Unregistered", "SEZ", "Overseas", "Deemed Export", "UIN Holders", "Tax Deductor"]
+
+        meta_bundle = {
+            "priorities": priorities,
+            "issue_types": issue_types,
+            "status_options": status_options,
+            "address_type_options": address_type_options,
+            "gst_category_options": gst_category_options
+        }
+        try:
+            frappe.cache().set_value(cache_key, meta_bundle, expires_in_sec=3600)
+        except Exception:
+            pass
+        return meta_bundle
+
+    meta_bundle = get_cached_portal_meta()
+    priorities = meta_bundle["priorities"]
+    issue_types = meta_bundle["issue_types"]
+    status_options = meta_bundle["status_options"]
+    address_type_options = meta_bundle["address_type_options"]
+    gst_category_options = meta_bundle["gst_category_options"]
 
     # Dynamic Security Health Score calculation based strictly on live customer database records
     lic_comp = min(100, int((active_licenses / len(renewals)) * 100)) if renewals else 100
@@ -544,45 +601,68 @@ def get_portal_data(customer_name=None):
         ]
     }
 
+    person_cache = {}
     def resolve_person_meta(pname):
         if not pname:
             return {"name": "", "image": "", "email": ""}
         pname_str = str(pname).strip()
+        if pname_str in person_cache:
+            return person_cache[pname_str]
+
+        cache_key = f"portal_person_meta:{pname_str}"
+        try:
+            cached_val = frappe.cache().get_value(cache_key)
+            if cached_val:
+                person_cache[pname_str] = cached_val
+                return cached_val
+        except Exception:
+            pass
+
         img = ""
         email = pname_str if "@" in pname_str else ""
         full_name = pname_str
 
-        if frappe.db.exists("User", pname_str):
-            u_doc = frappe.db.get_value("User", pname_str, ["full_name", "user_image", "email"], as_dict=True)
-            if u_doc:
-                full_name = u_doc.full_name or pname_str
-                img = u_doc.user_image or ""
-                email = u_doc.email or email
-        elif frappe.db.exists("Sales Person", pname_str):
-            sp_doc = frappe.get_doc("Sales Person", pname_str)
-            if hasattr(sp_doc, "email_id") and sp_doc.get("email_id"):
-                email = sp_doc.get("email_id")
-            emp = sp_doc.get("employee")
-            if emp and frappe.db.exists("Employee", emp):
-                e_doc = frappe.db.get_value("Employee", emp, ["employee_name", "image", "user_id", "company_email", "personal_email"], as_dict=True)
+        # 1. Quick check User table
+        u_doc = frappe.db.get_value("User", pname_str, ["full_name", "user_image", "email"], as_dict=True) if frappe.db.exists("User", pname_str) else None
+        if u_doc:
+            full_name = u_doc.full_name or pname_str
+            img = u_doc.user_image or ""
+            email = u_doc.email or email
+        else:
+            # 2. Check Sales Person
+            sp_doc = frappe.db.get_value("Sales Person", pname_str, ["sales_person_name", "employee", "email_id"], as_dict=True) if frappe.db.exists("Sales Person", pname_str) else None
+            if sp_doc:
+                if sp_doc.get("email_id"):
+                    email = sp_doc.get("email_id")
+                emp = sp_doc.get("employee")
+                if emp:
+                    e_doc = frappe.db.get_value("Employee", emp, ["employee_name", "image", "user_id", "company_email", "personal_email"], as_dict=True)
+                    if e_doc:
+                        full_name = e_doc.employee_name or sp_doc.get("sales_person_name") or pname_str
+                        img = e_doc.image or (frappe.db.get_value("User", e_doc.user_id, "user_image") if e_doc.user_id else "")
+                        email = e_doc.company_email or e_doc.personal_email or e_doc.user_id or email
+            else:
+                # 3. Check Employee
+                e_doc = frappe.db.get_value("Employee", pname_str, ["employee_name", "image", "user_id", "company_email", "personal_email"], as_dict=True) if frappe.db.exists("Employee", pname_str) else None
                 if e_doc:
                     full_name = e_doc.employee_name or pname_str
                     img = e_doc.image or (frappe.db.get_value("User", e_doc.user_id, "user_image") if e_doc.user_id else "")
                     email = e_doc.company_email or e_doc.personal_email or e_doc.user_id or email
-        elif frappe.db.exists("Employee", pname_str):
-            e_doc = frappe.db.get_value("Employee", pname_str, ["employee_name", "image", "user_id", "company_email", "personal_email"], as_dict=True)
-            if e_doc:
-                full_name = e_doc.employee_name or pname_str
-                img = e_doc.image or (frappe.db.get_value("User", e_doc.user_id, "user_image") if e_doc.user_id else "")
-                email = e_doc.company_email or e_doc.personal_email or e_doc.user_id or email
-        elif frappe.db.exists("Contact", pname_str):
-            c_doc = frappe.db.get_value("Contact", pname_str, ["first_name", "last_name", "email_id", "image", "user_image"], as_dict=True)
-            if c_doc:
-                full_name = f"{c_doc.first_name or ''} {c_doc.last_name or ''}".strip() or pname_str
-                img = c_doc.image or c_doc.user_image or ""
-                email = c_doc.email_id or email
+                else:
+                    # 4. Check Contact
+                    c_doc = frappe.db.get_value("Contact", pname_str, ["first_name", "last_name", "email_id", "image", "user_image"], as_dict=True) if frappe.db.exists("Contact", pname_str) else None
+                    if c_doc:
+                        full_name = f"{c_doc.first_name or ''} {c_doc.last_name or ''}".strip() or pname_str
+                        img = c_doc.image or c_doc.user_image or ""
+                        email = c_doc.email_id or email
 
-        return {"name": full_name, "image": img or "", "email": email or ""}
+        res = {"name": full_name, "image": img or "", "email": email or ""}
+        person_cache[pname_str] = res
+        try:
+            frappe.cache().set_value(cache_key, res, expires_in_sec=1800)
+        except Exception:
+            pass
+        return res
 
     sp_raw = customer_doc.get("account_manager") or customer_doc.get("sales_person") or ""
     tl_raw = customer_doc.get("technical_lead") or ""
@@ -944,21 +1024,62 @@ def create_support_ticket(
                 attachments = []
         if isinstance(attachments, list):
             frappe.flags.ignore_permissions = True
-            for file_url in attachments:
-                if file_url and isinstance(file_url, str):
-                    file_names = frappe.get_all("File", filters={"file_url": file_url}, fields=["name"], ignore_permissions=True)
-                    if not file_names:
-                        fname = file_url.split('/')[-1]
-                        file_names = frappe.get_all("File", filters=[["File", "file_name", "like", f"%{fname}%"]], fields=["name"], ignore_permissions=True)
-                    for f in file_names:
+            for att in attachments:
+                if not att:
+                    continue
+                file_doc_name = None
+                file_url_val = None
+                
+                if isinstance(att, dict):
+                    file_doc_name = att.get("name") or att.get("file_id")
+                    file_url_val = att.get("file_url")
+                elif isinstance(att, str):
+                    if frappe.db.exists("File", att):
+                        file_doc_name = att
+                    else:
+                        file_url_val = att
+
+                # If we have a direct File document name, attach it safely
+                if file_doc_name and frappe.db.exists("File", file_doc_name):
+                    try:
+                        frappe.db.set_value("File", file_doc_name, {
+                            "attached_to_doctype": "Issue",
+                            "attached_to_name": issue.name,
+                            "is_private": 0
+                        }, update_modified=False)
+                    except Exception as ex:
+                        frappe.log_error(f"Failed to update file {file_doc_name}: {ex}")
+                elif file_url_val and isinstance(file_url_val, str):
+                    # Safe fallback: find ONLY an unattached or newly uploaded file owned by current user
+                    # NEVER reattach files that belong to another document, and NEVER attach multiple files!
+                    candidate_files = frappe.db.sql("""
+                        SELECT name FROM `tabFile`
+                        WHERE file_url = %(file_url)s
+                          AND owner = %(user)s
+                          AND (attached_to_name IS NULL OR attached_to_name = '' OR attached_to_name = %(issue)s)
+                        ORDER BY creation DESC
+                        LIMIT 1
+                    """, {"file_url": file_url_val, "user": user, "issue": issue.name}, as_dict=True)
+                    if not candidate_files:
+                        fname = file_url_val.split('/')[-1]
+                        candidate_files = frappe.db.sql("""
+                            SELECT name FROM `tabFile`
+                            WHERE file_name = %(file_name)s
+                              AND owner = %(user)s
+                              AND (attached_to_name IS NULL OR attached_to_name = '' OR attached_to_name = %(issue)s)
+                            ORDER BY creation DESC
+                            LIMIT 1
+                        """, {"file_name": fname, "user": user, "issue": issue.name}, as_dict=True)
+                    if candidate_files:
+                        target_file_name = candidate_files[0]["name"]
                         try:
-                            frappe.db.set_value("File", f["name"], {
+                            frappe.db.set_value("File", target_file_name, {
                                 "attached_to_doctype": "Issue",
                                 "attached_to_name": issue.name,
                                 "is_private": 0
                             }, update_modified=False)
                         except Exception as ex:
-                            frappe.log_error(f"Failed to update file {f['name']}: {ex}")
+                            frappe.log_error(f"Failed to update file {target_file_name}: {ex}")
             frappe.flags.ignore_permissions = False
 
     frappe.db.commit()
@@ -1768,9 +1889,15 @@ def add_ticket_reply(ticket_name, comment_text, attachments=None):
                     "attached_to_name": ticket_name
                 }, update_modified=False)
             elif f_url:
-                file_docs = frappe.get_all("File", filters={"file_url": f_url}, fields=["name"])
-                for fd in file_docs:
-                    frappe.db.set_value("File", fd.name, {
+                candidate_files = frappe.db.sql("""
+                    SELECT name FROM `tabFile`
+                    WHERE file_url = %(file_url)s
+                      AND (attached_to_name IS NULL OR attached_to_name = '' OR attached_to_name = %(ticket)s)
+                    ORDER BY creation DESC
+                    LIMIT 1
+                """, {"file_url": f_url, "ticket": ticket_name}, as_dict=True)
+                if candidate_files:
+                    frappe.db.set_value("File", candidate_files[0]["name"], {
                         "attached_to_doctype": "Issue",
                         "attached_to_name": ticket_name
                     }, update_modified=False)
@@ -2050,3 +2177,161 @@ def update_ticket_contacts(ticket_name, contacts):
     return get_ticket_details(ticket_name)
 
 
+def get_user_by_identifier(identifier):
+    """Resolves a User document by name, email, or username."""
+    if not identifier:
+        return None
+
+    identifier = str(identifier).strip()
+
+    # 1. Match by primary key (name), e.g. "Administrator" or "user@domain.com"
+    user_data = frappe.db.get_value(
+        "User",
+        {"name": identifier},
+        ["name", "email", "username", "user_type", "enabled"],
+        as_dict=True
+    )
+
+    # 2. Match by email field
+    if not user_data:
+        user_data = frappe.db.get_value(
+            "User",
+            {"email": identifier},
+            ["name", "email", "username", "user_type", "enabled"],
+            as_dict=True
+        )
+
+    # 3. Match by username field
+    if not user_data:
+        user_data = frappe.db.get_value(
+            "User",
+            {"username": identifier},
+            ["name", "email", "username", "user_type", "enabled"],
+            as_dict=True
+        )
+
+    return user_data
+
+
+@frappe.whitelist(allow_guest=True)
+def check_user_type(email):
+    """Checks if the email or username belongs to an Employee (System User) or a Customer."""
+    if not email:
+        return {"status": "not_found"}
+        
+    user = get_user_by_identifier(email)
+    if not user:
+        return {"status": "not_found"}
+
+    if not user.enabled and user.name != "Administrator":
+        return {
+            "status": "disabled",
+            "message": _("This user account is disabled. Please contact your administrator.")
+        }
+
+    roles = frappe.get_roles(user.name)
+    is_employee = (
+        user.user_type == "System User"
+        or user.name == "Administrator"
+        or "System Manager" in roles
+        or "Administrator" in roles
+    )
+
+    if is_employee:
+        return {
+            "status": "employee",
+            "user": user.name,
+            "display": user.name if user.name == "Administrator" else (user.email or user.name)
+        }
+    else:
+        return {
+            "status": "customer",
+            "user": user.name,
+            "email": user.email or user.name,
+            "display": user.email or user.name
+        }
+
+
+@frappe.whitelist(allow_guest=True)
+def send_login_otp(email):
+    """Generates a 6-digit OTP, stores it in cache, and emails it."""
+    if not email:
+        frappe.throw(_("Email or username is required"), frappe.ValidationError)
+        
+    user = get_user_by_identifier(email)
+    if not user:
+        frappe.throw(_("User not found"), frappe.PermissionError)
+
+    recipient_email = user.email or user.name
+    if not recipient_email or "@" not in recipient_email:
+        frappe.throw(_("No valid email address found for this account to send OTP."), frappe.ValidationError)
+        
+    import random
+    otp = f"{random.randint(100000, 999999)}"
+    
+    # Store OTP in cache for 5 minutes (300 seconds)
+    frappe.cache.set_value(f"login_otp:{email}", otp, expires_in_sec=300)
+    frappe.cache.set_value(f"login_otp:{user.name}", otp, expires_in_sec=300)
+    if recipient_email != user.name:
+        frappe.cache.set_value(f"login_otp:{recipient_email}", otp, expires_in_sec=300)
+    
+    # Send OTP Email
+    subject = _("Your Customer Portal Login OTP")
+    message = f"""
+    <div style="font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <h2 style="color: #4f46e5; text-align: center;">Customer Portal</h2>
+        <p>Hello,</p>
+        <p>You requested a One-Time Password (OTP) to login to the Customer Portal.</p>
+        <div style="background-color: #f3f4f6; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; margin: 20px 0; border-radius: 6px; color: #1f2937;">
+            {otp}
+        </div>
+        <p style="color: #6b7280; font-size: 14px;">This OTP is valid for 5 minutes. Please do not share this code with anyone.</p>
+        <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 20px 0;">
+        <p style="color: #9ca3af; font-size: 12px; text-align: center;">If you did not request this code, you can safely ignore this email.</p>
+    </div>
+    """
+    
+    # Log the OTP for local development testing (so developers can test without SMTP configuration)
+    frappe.log_error(f"OTP for {recipient_email}: {otp}", _("Login OTP Debug"))
+    
+    frappe.sendmail(
+        recipients=recipient_email,
+        subject=subject,
+        message=message,
+        delayed=True
+    )
+    return {"status": "success"}
+
+
+
+@frappe.whitelist(allow_guest=True)
+def verify_login_otp(email, otp):
+    """Verifies the OTP and programmatically logs the user in."""
+    if not email or not otp:
+        frappe.throw(_("Email and OTP are required"), frappe.ValidationError)
+        
+    user = get_user_by_identifier(email)
+    if not user:
+        frappe.throw(_("User not found"), frappe.PermissionError)
+
+    recipient_email = user.email or user.name
+    cached_otp = (
+        frappe.cache.get_value(f"login_otp:{email}")
+        or frappe.cache.get_value(f"login_otp:{user.name}")
+        or frappe.cache.get_value(f"login_otp:{recipient_email}")
+    )
+    if not cached_otp or str(cached_otp) != str(otp):
+        frappe.throw(_("Invalid or expired OTP. Please request a new one."), frappe.AuthenticationError)
+        
+    # Delete the cached OTP once verified
+    frappe.cache.delete_value(f"login_otp:{email}")
+    frappe.cache.delete_value(f"login_otp:{user.name}")
+    frappe.cache.delete_value(f"login_otp:{recipient_email}")
+    
+    # Authenticate and login programmatically with canonical user.name
+    frappe.local.login_manager.login_as(user.name)
+    
+    return {
+        "status": "success",
+        "redirect_to": "/customer-portal"
+    }

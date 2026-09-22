@@ -1,12 +1,17 @@
 import frappe
-from customer_portal.api-customer-portal-view import get_customer_for_user
+from customer_portal.api import get_customer_for_user
+
+no_cache = 1
 
 def get_context(context):
     user = frappe.session.user
+    if not user or user == "Guest":
+        frappe.local.flags.redirect_location = "/login"
+        raise frappe.Redirect
+
+    context.no_cache = 1
     context.user_email = user
-    if user == "Guest":
-        context.customer_name = "Guest"
-    else:
-        context.customer_name = get_customer_for_user(user)
+    context.customer_name = get_customer_for_user(user)
     context.title = "Overview - 64 NSPL"
     context.full_width = True
+

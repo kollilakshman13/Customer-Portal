@@ -1,0 +1,643 @@
+{% extends "templates/web.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head_include %}
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+	:root {
+		--login-bg: linear-gradient(135deg, #090d16 0%, #111428 50%, #20092c 100%);
+		--card-bg: rgba(22, 28, 45, 0.7);
+		--card-border: rgba(255, 255, 255, 0.08);
+		--text-main: #f8fafc;
+		--text-muted: #94a3b8;
+		--input-bg: rgba(15, 23, 42, 0.6);
+		--input-border: rgba(255, 255, 255, 0.1);
+		--input-focus-border: #6366f1;
+		--btn-primary-bg: linear-gradient(90deg, #6366f1 0%, #4f46e5 100%);
+		--btn-primary-hover: linear-gradient(90deg, #4f46e5 0%, #4338ca 100%);
+		--shadow-glow: 0 0 20px rgba(99, 102, 241, 0.25);
+		--shadow-card: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+	}
+
+	body {
+		font-family: 'Outfit', sans-serif !important;
+	}
+
+	/* Wrapper that fills space between header and footer with standard alignment */
+	.login-wrapper {
+		width: 100%;
+		/* background: var(--login-bg); */
+		padding: 80px 20px;
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		min-height: 60vh;
+		box-sizing: border-box;
+		margin: 0;
+	}
+
+	/* Card design */
+	.login-card {
+		width: 100%;
+		max-width: 410px;
+		/* background: var(--card-bg);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px); */
+		border: 1px solid var(--card-border);
+		border-radius: 24px;
+		padding: 40px 32px;
+		/* box-shadow: var(--shadow-card); */
+		position: relative;
+		overflow: hidden;
+		box-sizing: border-box;
+		transition: all 0.3s ease;
+	}
+
+	.login-card::before {
+		content: '';
+		position: absolute;
+		top: -40%;
+		left: -40%;
+		width: 180%;
+		height: 180%;
+		background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 60%);
+		pointer-events: none;
+		z-index: 0;
+	}
+
+	.login-header {
+		position: relative;
+		z-index: 1;
+		text-align: center;
+		margin-bottom: 25px;
+	}
+
+	.app-logo-custom {
+		max-height: 48px;
+		margin-bottom: 12px;
+		filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.3));
+	}
+
+	.login-title {
+		font-size: 24px;
+		font-weight: 700;
+		letter-spacing: -0.5px;
+		/* color: var(--text-main); */
+		margin: 0 0 6px 0;
+	}
+
+	.login-subtitle {
+		font-size: 13px;
+		color: var(--text-muted);
+		margin: 0;
+	}
+
+	.form-stage {
+		display: none;
+		position: relative;
+		z-index: 1;
+	}
+
+	.form-stage.active {
+		display: block;
+		animation: fadeInCustom 0.35s ease-out forwards;
+	}
+
+	.form-group-custom {
+		margin-bottom: 18px;
+		position: relative;
+	}
+
+	.form-group-custom label {
+		display: block;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-muted);
+		margin-bottom: 6px;
+		text-transform: uppercase;
+		letter-spacing: 0.8px;
+	}
+
+	.input-custom {
+		width: 100%;
+		background: var(--input-bg) !important;
+		border: 1px solid var(--input-border) !important;
+		border-radius: 12px !important;
+		padding: 12px 16px !important;
+		font-size: 14px !important;
+		color: var(--text-main) !important;
+		outline: none !important;
+		box-sizing: border-box !important;
+		transition: all 0.2s ease !important;
+	}
+
+	.input-custom:focus {
+		border-color: var(--input-focus-border) !important;
+		box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2), var(--shadow-glow) !important;
+	}
+
+	.btn-custom {
+		width: 100%;
+		background: var(--btn-primary-bg) !important;
+		color: #ffffff !important;
+		border: none !important;
+		border-radius: 12px !important;
+		padding: 13px !important;
+		font-size: 14px !important;
+		font-weight: 600 !important;
+		cursor: pointer !important;
+		display: flex !important;
+		align-items: center !important;
+		justify-content: center !important;
+		gap: 10px !important;
+		transition: all 0.25s ease !important;
+		box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2) !important;
+		box-sizing: border-box !important;
+	}
+
+	.btn-custom:hover {
+		background: var(--btn-primary-hover) !important;
+		transform: translateY(-1px) !important;
+		box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35) !important;
+	}
+
+	.btn-custom:active {
+		transform: translateY(1px) !important;
+	}
+
+	.btn-custom:disabled {
+		opacity: 0.65 !important;
+		cursor: not-allowed !important;
+		transform: none !important;
+		box-shadow: none !important;
+	}
+
+	/* Isolated spinner styles to avoid collision with bootstrap */
+	.login-spinner-circle {
+		width: 18px !important;
+		height: 18px !important;
+		border: 2px solid rgba(255, 255, 255, 0.3) !important;
+		border-top: 2px solid #ffffff !important;
+		border-radius: 50% !important;
+		background: transparent !important;
+		animation: spin-custom 0.8s linear infinite !important;
+		display: none;
+		box-sizing: border-box !important;
+	}
+
+	/* Back link styling */
+	.back-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--text-muted);
+		font-size: 13px;
+		text-decoration: none;
+		margin-top: 15px;
+		cursor: pointer;
+		transition: color 0.2s ease;
+	}
+
+	.back-link:hover {
+		color: var(--text-main);
+	}
+
+	/* OTP Resend block */
+	.otp-resend-container {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-top: 8px;
+		font-size: 12px;
+	}
+
+	.resend-btn {
+		background: none;
+		border: none;
+		color: #6366f1;
+		cursor: pointer;
+		padding: 0;
+		font-weight: 600;
+		font-size: 12px;
+	}
+
+	.resend-btn:disabled {
+		color: var(--text-muted);
+		cursor: not-allowed;
+		font-weight: 500;
+	}
+
+	/* Alert banners */
+	.alert-custom {
+		padding: 10px 14px;
+		border-radius: 10px;
+		margin-bottom: 18px;
+		font-size: 13px;
+		font-weight: 500;
+		display: none;
+		animation: slideDownCustom 0.3s ease-out forwards;
+	}
+
+	.alert-error {
+		background: rgba(239, 68, 68, 0.12);
+		border: 1px solid rgba(239, 68, 68, 0.25);
+		color: #fca5a5;
+	}
+
+	.alert-success {
+		background: rgba(16, 185, 129, 0.12);
+		border: 1px solid rgba(16, 185, 129, 0.25);
+		color: #a7f3d0;
+	}
+
+	@keyframes fadeInCustom {
+		from {
+			opacity: 0;
+			transform: translateY(6px);
+		}
+
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes slideDownCustom {
+		from {
+			opacity: 0;
+			transform: translateY(-6px);
+		}
+
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes spin-custom {
+		0% {
+			transform: rotate(0deg);
+		}
+
+		100% {
+			transform: rotate(360deg);
+		}
+	}
+</style>
+{% endblock %}
+
+{% block page_content %}
+<div class="login-wrapper">
+	<div class="login-card">
+		<div class="login-header">
+			{% if logo %}
+			<img class="app-logo-custom" src="{{ logo }}" alt="Logo">
+			{% endif %}
+			<h1 class="login-title">{{ _("Welcome back") }}</h1>
+			<p class="login-subtitle">{{ _("Log in to your account") }}</p>
+		</div>
+
+		<!-- Alert Messages -->
+		<div id="login-alert" class="alert-custom alert-error"></div>
+
+		<!-- STAGE 1: EMAIL / USERNAME INPUT -->
+		<div id="stage-email" class="form-stage active">
+			<form id="form-email" onsubmit="event.preventDefault(); handleEmailNext();">
+				<div class="form-group-custom">
+					<label for="email-input">{{ _("Email Address or Username") }}</label>
+					<input type="text" id="email-input" class="input-custom" placeholder="{{ _('name@company.com or Administrator') }}" required
+						autofocus autocomplete="username">
+				</div>
+				<button type="submit" id="btn-email-next" class="btn-custom">
+					<span>{{ _("Continue") }}</span>
+					<div class="login-spinner-circle" id="email-spinner"></div>
+				</button>
+			</form>
+		</div>
+
+		<!-- STAGE 2: EMPLOYEE PASSWORD INPUT -->
+		<div id="stage-password" class="form-stage">
+			<form id="form-password" onsubmit="event.preventDefault(); handleEmployeeLogin();">
+				<div class="form-group-custom">
+					<label>{{ _("Employee Account") }}</label>
+					<div style="font-size: 13px; margin-bottom: 12px; color: var(--text-muted); font-weight: 500;"
+						id="employee-email-display"></div>
+				</div>
+				<div class="form-group-custom">
+					<label for="password-input">{{ _("Password") }}</label>
+					<input type="password" id="password-input" class="input-custom" placeholder="••••••••"
+						autocomplete="current-password">
+				</div>
+				<button type="submit" id="btn-password-submit" class="btn-custom">
+					<span>{{ _("Log In") }}</span>
+					<div class="login-spinner-circle" id="password-spinner"></div>
+				</button>
+				<a class="back-link" onclick="goBackToEmail()">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+						stroke-linecap="round" stroke-linejoin="round">
+						<line x1="19" y1="12" x2="5" y2="12"></line>
+						<polyline points="12 19 5 12 12 5"></polyline>
+					</svg>
+					{{ _("Change user or email") }}
+				</a>
+			</form>
+		</div>
+
+		<!-- STAGE 3: CUSTOMER OTP INPUT -->
+		<div id="stage-otp" class="form-stage">
+			<form id="form-otp" onsubmit="event.preventDefault(); handleCustomerLogin();">
+				<div class="form-group-custom">
+					<label>{{ _("Customer Portal Access") }}</label>
+					<div style="font-size: 13px; margin-bottom: 8px; color: var(--text-muted); font-weight: 500;"
+						id="customer-email-display"></div>
+					<div
+						style="font-size: 12px; color: #a7f3d0; background: rgba(16, 185, 129, 0.1); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(16, 185, 129, 0.2);">
+						{{ _("A login code has been sent to your email address.") }}
+					</div>
+				</div>
+				<div class="form-group-custom">
+					<label for="otp-input">{{ _("Enter OTP Code") }}</label>
+					<input type="text" id="otp-input" class="input-custom" placeholder="6-digit code" maxlength="6"
+						inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code">
+					<div class="otp-resend-container">
+						<span id="otp-timer-text" style="color: var(--text-muted);">Resend in <span
+								id="otp-timer">03:00</span></span>
+						<button type="button" id="btn-resend-otp" class="resend-btn" onclick="resendOTP()" disabled>{{
+							_("Resend Code") }}</button>
+					</div>
+				</div>
+				<button type="submit" id="btn-otp-submit" class="btn-custom">
+					<span>{{ _("Verify & Log In") }}</span>
+					<div class="login-spinner-circle" id="otp-spinner"></div>
+				</button>
+				<a class="back-link" onclick="goBackToEmail()">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+						stroke-linecap="round" stroke-linejoin="round">
+						<line x1="19" y1="12" x2="5" y2="12"></line>
+						<polyline points="12 19 5 12 12 5"></polyline>
+					</svg>
+					{{ _("Change user or email") }}
+				</a>
+			</form>
+		</div>
+	</div>
+</div>
+
+<script>
+	let userInput = "";
+	let resolvedUser = "";
+	let timerInterval = null;
+
+	function showAlert(message, type = "error") {
+		const alertBox = document.getElementById("login-alert");
+		alertBox.innerText = message;
+		alertBox.className = `alert-custom alert-${type}`;
+		alertBox.style.display = "block";
+	}
+
+	function hideAlert() {
+		document.getElementById("login-alert").style.display = "none";
+	}
+
+	function setSubmitting(btnId, spinnerId, isSubmitting) {
+		const button = document.getElementById(btnId);
+		const spinner = document.getElementById(spinnerId);
+		if (isSubmitting) {
+			button.disabled = true;
+			spinner.style.display = "inline-block";
+		} else {
+			button.disabled = false;
+			spinner.style.display = "none";
+		}
+	}
+
+	// Phase 1: Determine User Type
+	function handleEmailNext() {
+		hideAlert();
+		userInput = document.getElementById("email-input").value.trim();
+		if (!userInput) return;
+
+		setSubmitting("btn-email-next", "email-spinner", true);
+
+		frappe.call({
+			method: "customer_portal.api.check_user_type",
+			args: { email: userInput },
+			callback: function (r) {
+				setSubmitting("btn-email-next", "email-spinner", false);
+				if (r.message) {
+					const status = r.message.status;
+					if (status === "employee") {
+						// Transition to Password Stage
+						resolvedUser = r.message.user || userInput;
+						document.getElementById("employee-email-display").innerText = r.message.display || userInput;
+						switchStage("stage-email", "stage-password");
+						document.getElementById("password-input").focus();
+					} else if (status === "customer") {
+						// Send OTP & transition to OTP Stage
+						resolvedUser = r.message.user || userInput;
+						document.getElementById("customer-email-display").innerText = r.message.display || userInput;
+						triggerOTPSending();
+					} else if (status === "disabled") {
+						showAlert(r.message.message || "This user account is disabled. Please contact support.");
+					} else {
+						showAlert("This email or username is not registered with us. Please check again or contact support.");
+					}
+				}
+			},
+			error: function () {
+				setSubmitting("btn-email-next", "email-spinner", false);
+				showAlert("Unable to verify user. Please try again later.");
+			}
+		});
+	}
+
+	// Trigger OTP Send backend method
+	function triggerOTPSending() {
+		setSubmitting("btn-email-next", "email-spinner", true);
+		frappe.call({
+			method: "customer_portal.api.send_login_otp",
+			args: { email: resolvedUser || userInput },
+			callback: function (r) {
+				setSubmitting("btn-email-next", "email-spinner", false);
+				if (r.message && r.message.status === "success") {
+					switchStage("stage-email", "stage-otp");
+					startResendTimer();
+					document.getElementById("otp-input").focus();
+				}
+			},
+			error: function (err) {
+				setSubmitting("btn-email-next", "email-spinner", false);
+				if (err && err._server_messages) {
+					try {
+						let parsed = JSON.parse(err._server_messages);
+						showAlert(JSON.parse(parsed[0]).message);
+					} catch (e) {
+						showAlert("Error sending OTP link. Please check your credentials.");
+					}
+				} else {
+					showAlert("Error sending OTP link.");
+				}
+			}
+		});
+	}
+
+	// Resend OTP trigger
+	function resendOTP() {
+		hideAlert();
+		const btn = document.getElementById("btn-resend-otp");
+		btn.disabled = true;
+
+		frappe.call({
+			method: "customer_portal.api.send_login_otp",
+			args: { email: resolvedUser || userInput },
+			callback: function (r) {
+				if (r.message && r.message.status === "success") {
+					showAlert("A new OTP code has been sent successfully.", "success");
+					startResendTimer();
+				}
+			},
+			error: function () {
+				btn.disabled = false;
+				showAlert("Failed to resend OTP code. Please try again.");
+			}
+		});
+	}
+
+	// Stage navigation helper
+	function switchStage(fromId, toId) {
+		document.getElementById(fromId).classList.remove("active");
+		document.getElementById(toId).classList.add("active");
+	}
+
+	function goBackToEmail() {
+		hideAlert();
+		clearInterval(timerInterval);
+		// Reset password input
+		document.getElementById("password-input").value = "";
+		// Reset OTP input
+		document.getElementById("otp-input").value = "";
+
+		const activeStage = document.querySelector(".form-stage.active").id;
+		switchStage(activeStage, "stage-email");
+		document.getElementById("email-input").focus();
+	}
+
+	// Employee Password login handler
+	function handleEmployeeLogin() {
+		hideAlert();
+		const password = document.getElementById("password-input").value;
+		if (!password) {
+			showAlert("Please enter your password.");
+			return;
+		}
+
+		setSubmitting("btn-password-submit", "password-spinner", true);
+
+		// Post standard login request
+		frappe.call({
+			type: "POST",
+			url: "/login",
+			args: {
+				cmd: "login",
+				usr: resolvedUser || userInput,
+				pwd: password
+			},
+			callback: function (r) {
+				setSubmitting("btn-password-submit", "password-spinner", false);
+				if (r.message === "Logged In") {
+					showAlert("Login successful! Redirecting...", "success");
+					window.location.href = frappe.utils.sanitise_redirect(frappe.utils.get_url_arg("redirect-to")) || "/app";
+				} else if (r.message === "PasswordReset") {
+					window.location.href = "/update-password";
+				}
+			},
+			error: function (err) {
+				setSubmitting("btn-password-submit", "password-spinner", false);
+				if (err && err._server_messages) {
+					try {
+						let parsed = JSON.parse(err._server_messages);
+						showAlert(JSON.parse(parsed[0]).message);
+					} catch (e) {
+						showAlert("Invalid username/email or password.");
+					}
+				} else {
+					showAlert("Invalid username/email or password.");
+				}
+			}
+		});
+	}
+
+	// Customer OTP login handler
+	function handleCustomerLogin() {
+		hideAlert();
+		const otp = document.getElementById("otp-input").value.trim();
+		if (!otp || otp.length !== 6) {
+			showAlert("Please enter a valid 6-digit OTP code.");
+			return;
+		}
+
+		setSubmitting("btn-otp-submit", "otp-spinner", true);
+
+		frappe.call({
+			method: "customer_portal.api.verify_login_otp",
+			args: {
+				email: resolvedUser || userInput,
+				otp: otp
+			},
+			callback: function (r) {
+				setSubmitting("btn-otp-submit", "otp-spinner", false);
+				if (r.message && r.message.status === "success") {
+					showAlert("Verification successful! Redirecting...", "success");
+					// Clean up OTP session timer
+					clearInterval(timerInterval);
+					// Redirect to the customer portal
+					window.location.href = r.message.redirect_to || "/customer-portal";
+				}
+			},
+			error: function (err) {
+				setSubmitting("btn-otp-submit", "otp-spinner", false);
+				if (err && err._server_messages) {
+					try {
+						let parsed = JSON.parse(err._server_messages);
+						showAlert(JSON.parse(parsed[0]).message);
+					} catch (e) {
+						showAlert("Verification failed. Please try again.");
+					}
+				} else {
+					showAlert("Verification failed. Please try again.");
+				}
+			}
+		});
+	}
+
+	function formatTime(seconds) {
+		const mins = Math.floor(seconds / 60);
+		const secs = seconds % 60;
+		return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
+	}
+
+	// Resend Timer countdown handler (3 minutes / 180 seconds)
+	function startResendTimer() {
+		const timerTextElement = document.getElementById("otp-timer-text");
+		const timerElement = document.getElementById("otp-timer");
+		const resendBtn = document.getElementById("btn-resend-otp");
+
+		let timeLeft = 180;
+		resendBtn.disabled = true;
+		timerTextElement.style.display = "inline";
+		timerElement.innerText = formatTime(timeLeft);
+
+		clearInterval(timerInterval);
+		timerInterval = setInterval(() => {
+			timeLeft--;
+			timerElement.innerText = formatTime(timeLeft);
+			if (timeLeft <= 0) {
+				clearInterval(timerInterval);
+				resendBtn.disabled = false;
+				timerTextElement.style.display = "none";
+			}
+		}, 1000);
+	}
+</script>
+{% endblock %}

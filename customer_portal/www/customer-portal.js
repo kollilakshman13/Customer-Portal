@@ -36,8 +36,8 @@ function updateDocumentTitle(pageTitle, detailName = null) {
 // Page List States for filtering and pagination
 const listState = {
     renewals: { search: '', status: 'active', limit: 10 },
-    invoices: { search: '', status: 'all', limit: 10 },
-    tickets: { search: '', status: 'all', limit: 10 }
+    invoices: { search: '', status: 'pending', limit: 10 },
+    tickets: { search: '', status: 'open', limit: 10 }
 };
 
 // DOM Element Creator
@@ -153,15 +153,29 @@ function getInvoiceStatusClass(status) {
     return 'green';
 }
 
+// function getRenewalDisplayStatus(ren) {
+//     if (!ren) return 'Active';
+//     const today = new Date();
+//     const endDate = ren.end_date ? new Date(ren.end_date) : null;
+//     const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+//     if (ren.status && ren.status.toLowerCase() === 'draft') return 'Draft';
+//     if (daysLeft < 0 || (ren.status && ren.status.toLowerCase() === 'expired') || (ren.status && ren.status.toLowerCase() === 'lost')) return 'Expired';
+//     return ren.status || 'Active';
+// }
+
 function getRenewalDisplayStatus(ren) {
     if (!ren) return 'Active';
+    const rawSt = (ren.status || '').toLowerCase();
+    if (rawSt === 'draft') return 'Draft';
+    if (rawSt === 'active') return 'Active'; // Keep Active even if end date has passed
+
     const today = new Date();
     const endDate = ren.end_date ? new Date(ren.end_date) : null;
     const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
-    if (ren.status && ren.status.toLowerCase() === 'draft') return 'Draft';
-    if (daysLeft < 0 || (ren.status && ren.status.toLowerCase() === 'expired') || (ren.status && ren.status.toLowerCase() === 'lost')) return 'Expired';
+    if (daysLeft < 0 || rawSt === 'expired' || rawSt === 'lost') return 'Expired';
     return ren.status || 'Active';
 }
+
 
 function getRenewalStatusClass(status) {
     if (!status) return 'green';
@@ -335,8 +349,6 @@ function go(name, el, skipHash, statusFilter) {
 
 // Route Restoration Handler for Initial Load & Popstate
 function handleUrlRoute() {
-    if (!portalData) return;
-
     let routeStr = '';
     const currentPath = window.location.pathname;
     if (currentPath.includes('/customer-portal')) {
@@ -379,7 +391,7 @@ function handleUrlRoute() {
         return;
     }
 
-    if (detailId) {
+    if (detailId && portalData) {
         let found = false;
         if (mainTab === 'renewals' && portalData.renewals) {
             const rec = portalData.renewals.find(r => r.name === detailId);
@@ -427,42 +439,47 @@ function fetchPortalData(targetCustomer, onComplete) {
         method: "customer_portal.api.get_portal_data",
         args: custParam ? { customer_name: custParam } : {},
         callback: function (r) {
-            if (r.message) {
-                if (r.message.permission_denied) {
-                    showPermissionDeniedScreen(r.message.error, r.message.permitted_customers);
-                    return;
-                }
-                if (r.message.needs_customer_selection) {
-                    adminPermittedCustomers = r.message.permitted_customers || [];
-                    openAdminCustomerModal();
-                    return;
-                }
-                if (r.message.error) {
-                    showPermissionDeniedScreen(r.message.error);
-                    return;
-                }
-
-                hidePermissionDeniedScreen();
-                portalData = r.message;
-
-                // Handle System User Admin Switcher UI
-                if (portalData.is_system_user) {
-                    const custName = portalData.customer_info?.customer_name || portalData.customer_info?.name;
-                    activeAdminCustomer = custName;
-                    sessionStorage.setItem('cp_active_customer', custName);
-                    renderAdminViewingBadge(custName);
-                } else {
-                    hideAdminViewingBadge();
-                }
-
-                renderPortal();
-                if (!onComplete) {
-                    handleUrlRoute();
-                }
-                if (typeof onComplete === 'function') {
-                    onComplete();
-                }
+            if (r.exc || !r.message) {
+                window.location.replace('/login');
+                return;
             }
+            if (r.message.permission_denied) {
+                showPermissionDeniedScreen(r.message.error, r.message.permitted_customers);
+                return;
+            }
+            if (r.message.needs_customer_selection) {
+                adminPermittedCustomers = r.message.permitted_customers || [];
+                openAdminCustomerModal();
+                return;
+            }
+            if (r.message.error) {
+                showPermissionDeniedScreen(r.message.error);
+                return;
+            }
+
+            hidePermissionDeniedScreen();
+            portalData = r.message;
+
+            // Handle System User Admin Switcher UI
+            if (portalData.is_system_user) {
+                const custName = portalData.customer_info?.customer_name || portalData.customer_info?.name;
+                activeAdminCustomer = custName;
+                sessionStorage.setItem('cp_active_customer', custName);
+                renderAdminViewingBadge(custName);
+            } else {
+                hideAdminViewingBadge();
+            }
+
+            renderPortal();
+            if (!onComplete) {
+                handleUrlRoute();
+            }
+            if (typeof onComplete === 'function') {
+                onComplete();
+            }
+        },
+        error: function (err) {
+            window.location.replace('/login');
         }
     });
 }
@@ -620,6 +637,7 @@ function selectAdminCustomer(customerName) {
 function renderPortal() {
     if (!portalData) return;
     renderHeader();
+    renderNotifications();
     renderDashboard();
     renderRenewals();
     renderInvoices();
@@ -716,6 +734,7 @@ function toggleAccountDropdown(e, type = 'topbar') {
     if (!drop) return;
     const isOpen = drop.classList.contains('show');
     closeAccountDropdown();
+    closeNotificationDropdown();
     if (!isOpen) {
         drop.classList.add('show');
     }
@@ -725,19 +744,287 @@ function closeAccountDropdown() {
     document.querySelectorAll('.pf-account-dropdown').forEach(d => d.classList.remove('show'));
 }
 
+// ==========================================
+// NOTIFICATION CENTER SYSTEM
+// ==========================================
+
+function getReadNotificationIds() {
+    try {
+        const stored = localStorage.getItem('cp_read_notifications');
+        return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveReadNotificationIds(ids) {
+    try {
+        localStorage.setItem('cp_read_notifications', JSON.stringify(ids));
+    } catch (e) {}
+}
+
+function computeNotificationsList() {
+    if (!portalData) return [];
+    const notifs = [];
+    const now = new Date();
+
+    // 1. Renewals Alerts (Expiring or Expired)
+    const renewals = portalData.renewals || [];
+    renewals.forEach(r => {
+        if (!r.end_date) return;
+        const endDate = new Date(r.end_date);
+        const diffTime = endDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0 && Math.abs(diffDays) <= 90) {
+            notifs.push({
+                id: `ren-exp-${r.name}`,
+                type: 'renewal',
+                icon: 'ti ti-alert-triangle',
+                title: 'License Expired',
+                desc: `${r.product_name || r.name} expired ${Math.abs(diffDays)}d ago.`,
+                time: `Expired on ${formatDate(r.end_date)}`,
+                targetTab: 'renewals',
+                targetId: r.name,
+                priority: 1
+            });
+        } else if (diffDays >= 0 && diffDays <= 30) {
+            notifs.push({
+                id: `ren-due-${r.name}`,
+                type: 'renewal',
+                icon: 'ti ti-refresh',
+                title: 'Renewal Due Soon',
+                desc: `${r.product_name || r.name} is due for renewal in ${diffDays === 0 ? 'today' : diffDays + ' days'}.`,
+                time: `Due on ${formatDate(r.end_date)}`,
+                targetTab: 'renewals',
+                targetId: r.name,
+                priority: 2
+            });
+        }
+    });
+
+    // 2. Invoice Alerts (Overdue / Open Pending Payment)
+    const invoices = portalData.invoices || [];
+    invoices.forEach(inv => {
+        const outAmt = flt(inv.outstanding_amount);
+        if (outAmt > 0) {
+            const dueDate = inv.due_date ? new Date(inv.due_date) : (inv.posting_date ? new Date(inv.posting_date) : null);
+            const isOverdue = inv.status === 'Overdue' || (dueDate && dueDate < now);
+            if (isOverdue) {
+                notifs.push({
+                    id: `inv-od-${inv.name}`,
+                    type: 'invoice',
+                    icon: 'ti ti-file-invoice',
+                    title: 'Overdue Invoice',
+                    desc: `Invoice ${inv.name} for ${formatCurrency(outAmt)} is overdue.`,
+                    time: `Due ${inv.due_date ? formatDate(inv.due_date) : ''}`,
+                    targetTab: 'invoices',
+                    targetId: inv.name,
+                    priority: 1
+                });
+            } else {
+                notifs.push({
+                    id: `inv-unpaid-${inv.name}`,
+                    type: 'invoice',
+                    icon: 'ti ti-receipt',
+                    title: 'Payment Pending',
+                    desc: `Invoice ${inv.name} for ${formatCurrency(outAmt)} is awaiting payment.`,
+                    time: `Due ${inv.due_date ? formatDate(inv.due_date) : ''}`,
+                    targetTab: 'invoices',
+                    targetId: inv.name,
+                    priority: 3
+                });
+            }
+        }
+    });
+
+    // 3. Support Ticket Alerts (Active / Escalated)
+    const tickets = (portalData.support && portalData.support.tickets) ? portalData.support.tickets : (portalData.tickets || []);
+    tickets.forEach(t => {
+        const st = getTicketDisplayStatus(t);
+        const stLower = st.toLowerCase();
+        if (stLower !== 'closed' && stLower !== 'resolved') {
+            const isEscalated = stLower === 'oem escalated';
+            notifs.push({
+                id: `tkt-${t.name}`,
+                type: 'ticket',
+                icon: 'ti ti-ticket',
+                title: isEscalated ? 'Vendor Escalation' : 'Open Ticket',
+                desc: `${t.name}: ${t.subject || 'Support Ticket'} (${st})`,
+                time: `Updated ${t.modified ? formatDate(t.modified) : (t.creation ? formatDate(t.creation) : '')}`,
+                targetTab: 'tickets',
+                targetId: t.name,
+                priority: isEscalated ? 1 : 2
+            });
+        }
+    });
+
+    // Sort by priority, then type
+    notifs.sort((a, b) => a.priority - b.priority);
+    return notifs;
+}
+
+function renderNotifications() {
+    const badge = document.getElementById('topbar-bell-badge');
+    const pill = document.getElementById('notif-count-pill');
+    const listEl = document.getElementById('topbar-notif-list');
+    if (!listEl) return;
+
+    const notifs = computeNotificationsList();
+    const readIds = new Set(getReadNotificationIds());
+    const unreadCount = notifs.filter(n => !readIds.has(n.id)).length;
+
+    if (badge) {
+        if (unreadCount > 0) {
+            badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    if (pill) {
+        pill.textContent = unreadCount > 0 ? `${unreadCount} New` : '0 New';
+    }
+
+    listEl.replaceChildren();
+
+    if (notifs.length === 0) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'pf-notif-empty';
+        emptyDiv.innerHTML = '<i class="ti ti-bell-off" style="font-size:28px;color:#94a3b8;margin-bottom:8px;display:block;"></i>No notifications right now.';
+        listEl.appendChild(emptyDiv);
+        return;
+    }
+
+    notifs.forEach(item => {
+        const isUnread = !readIds.has(item.id);
+        const itemEl = document.createElement('div');
+        itemEl.className = 'pf-notif-item' + (isUnread ? ' unread' : '');
+        itemEl.setAttribute('role', 'button');
+        itemEl.setAttribute('tabindex', '0');
+
+        const iconEl = document.createElement('div');
+        iconEl.className = `pf-notif-icon type-${item.type}`;
+        const iEl = document.createElement('i');
+        iEl.className = item.icon;
+        iconEl.appendChild(iEl);
+        itemEl.appendChild(iconEl);
+
+        const contentEl = document.createElement('div');
+        contentEl.className = 'pf-notif-content';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'pf-notif-item-title';
+        titleEl.textContent = item.title;
+        contentEl.appendChild(titleEl);
+
+        const descEl = document.createElement('div');
+        descEl.className = 'pf-notif-item-desc';
+        descEl.textContent = item.desc;
+        contentEl.appendChild(descEl);
+
+        if (item.time) {
+            const timeEl = document.createElement('div');
+            timeEl.className = 'pf-notif-item-time';
+            timeEl.textContent = item.time;
+            contentEl.appendChild(timeEl);
+        }
+
+        itemEl.appendChild(contentEl);
+
+        if (isUnread) {
+            const dotEl = document.createElement('span');
+            dotEl.className = 'pf-notif-unread-dot';
+            itemEl.appendChild(dotEl);
+        }
+
+        itemEl.addEventListener('click', function () {
+            handleNotificationClick(item.id, item.targetTab, item.targetId);
+        });
+
+        listEl.appendChild(itemEl);
+    });
+}
+
+function toggleNotificationDropdown(e) {
+    if (e) e.stopPropagation();
+    const drop = document.getElementById('topbar-notification-dropdown');
+    if (!drop) return;
+    const isOpen = drop.classList.contains('show');
+    closeNotificationDropdown();
+    closeAccountDropdown();
+    if (!isOpen) {
+        renderNotifications();
+        drop.classList.add('show');
+    }
+}
+
+function closeNotificationDropdown() {
+    const drop = document.getElementById('topbar-notification-dropdown');
+    if (drop) drop.classList.remove('show');
+}
+
+function markAllNotificationsAsRead(e) {
+    if (e) e.stopPropagation();
+    const notifs = computeNotificationsList();
+    const allIds = notifs.map(n => n.id);
+    saveReadNotificationIds(allIds);
+    renderNotifications();
+}
+
+function handleNotificationClick(notifId, targetTab, targetId) {
+    const readIds = getReadNotificationIds();
+    if (!readIds.includes(notifId)) {
+        readIds.push(notifId);
+        saveReadNotificationIds(readIds);
+    }
+    closeNotificationDropdown();
+    renderNotifications();
+
+    if (!targetTab) return;
+
+    if (targetTab === 'renewals') {
+        if (targetId && portalData?.renewals) {
+            const rec = portalData.renewals.find(r => r.name === targetId);
+            if (rec) { openRenewalDetail(rec); return; }
+        }
+        go('renewals');
+    } else if (targetTab === 'invoices') {
+        if (targetId && portalData?.invoices) {
+            const rec = portalData.invoices.find(inv => inv.name === targetId);
+            if (rec) { openInvoiceDetail(rec); return; }
+        }
+        go('invoices');
+    } else if (targetTab === 'tickets') {
+        const ticketsList = (portalData && portalData.support && portalData.support.tickets) ? portalData.support.tickets : (portalData.tickets || []);
+        if (targetId) {
+            let rec = ticketsList.find(t => t.name === targetId);
+            if (!rec) rec = { name: targetId, subject: 'Support Ticket', status: 'Open' };
+            openTicketDetail(rec);
+            return;
+        }
+        go('tickets');
+    } else {
+        go(targetTab);
+    }
+}
+
 function handleLogout() {
+    sessionStorage.clear();
+    localStorage.removeItem('cp_active_customer');
     if (window.frappe && window.frappe.call) {
         frappe.call({
             method: 'logout',
             callback: function () {
-                window.location.href = '/login';
+                window.location.replace('/login');
             },
             error: function () {
-                window.location.href = '/login';
+                window.location.replace('/login');
             }
         });
     } else {
-        window.location.href = '/login';
+        window.location.replace('/login');
     }
 }
 
@@ -782,7 +1069,7 @@ function renderDashboard() {
     const highPriEl = document.getElementById('db-stat-high-priority');
     if (highPriEl) highPriEl.textContent = `${highPriorityCount} High Priority`;
 
-    // Stat 3: Upcoming Renewals (within 30 days)
+    // Stat 3: Upcoming Renewals (within 90 days)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const renewals = portalData.renewals || [];
@@ -790,7 +1077,7 @@ function renderDashboard() {
         const dispStatus = getRenewalDisplayStatus(ren);
         const endDate = ren.end_date ? new Date(ren.end_date) : null;
         const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
-        return dispStatus !== 'Expired' && dispStatus !== 'Draft' && daysLeft >= 0 && daysLeft <= 30;
+        return dispStatus !== 'Expired' && dispStatus !== 'Draft' && daysLeft >= 0 && daysLeft <= 90;
     });
     const upRenEl = document.getElementById('db-stat-upcoming-renewals');
     if (upRenEl) upRenEl.textContent = String(upcomingRenewals.length);
@@ -1238,35 +1525,96 @@ function renderActiveProductsSummary() {
     }
 }
 
+// Helper to extract comprehensive searchable text from a renewal and its child items
+function getRenewalSearchableText(ren) {
+    if (!ren || typeof ren !== 'object') return '';
+    const tokens = [];
+
+    function extract(val) {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            tokens.push(String(val));
+            return;
+        }
+        if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) {
+                extract(val[i]);
+            }
+            return;
+        }
+        if (typeof val === 'object') {
+            for (const k of Object.keys(val)) {
+                if (typeof val[k] === 'function') continue;
+                extract(val[k]);
+            }
+        }
+    }
+
+    extract(ren);
+
+    // Also include formatted representations
+    try {
+        const dispSt = getRenewalDisplayStatus(ren);
+        if (dispSt) tokens.push(dispSt);
+        if (ren.start_date) tokens.push(formatDate(ren.start_date));
+        if (ren.end_date) tokens.push(formatDate(ren.end_date));
+        if (ren.total_amount != null) tokens.push(formatCurrency(ren.total_amount));
+        if (ren.rate != null) tokens.push(formatCurrency(ren.rate));
+    } catch (e) {}
+
+    // Strip HTML tags and normalize to lowercase
+    return tokens.join(' ').replace(/<[^>]*>/g, ' ').toLowerCase();
+}
+
 // Renewals & Detail Render with Filtering & Pagination
 function renderRenewals() {
     const tbody = document.getElementById('renewals-tbody');
     if (!tbody || !portalData) return;
 
     const rawRenewals = portalData.renewals || [];
-    const search = listState.renewals.search.toLowerCase();
+    const search = (listState.renewals.search || '').toLowerCase().trim();
     const statusTab = listState.renewals.status;
     const today = new Date();
 
     // Compute Tab Counts
     let cntActive = 0, cntDue = 0, cntExpired = 0;
-    rawRenewals.forEach(r => {
+    // rawRenewals.forEach(r => {
+    //     const endDate = r.end_date ? new Date(r.end_date) : null;
+    //     const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+    //     const rawSt = (r.status || 'Active').toLowerCase();
+
+    //     if (rawSt === 'draft') {
+    //         // Draft excluded from visible tabs
+    //     } else if (daysLeft < 0 || rawSt === 'expired' || rawSt === 'lost') {
+    //         // Only count expired if within last 90 days
+    //         if (daysLeft >= -90) cntExpired++;
+    //     } else {
+    //         cntActive++;
+    //         if (daysLeft <= 90) {
+    //             cntDue++;
+    //         }
+    //     }
+    // });
+
+        rawRenewals.forEach(r => {
         const endDate = r.end_date ? new Date(r.end_date) : null;
         const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
         const rawSt = (r.status || 'Active').toLowerCase();
 
         if (rawSt === 'draft') {
             // Draft excluded from visible tabs
+        } else if (rawSt === 'active') {
+            cntActive++;
+            if (daysLeft >= 0 && daysLeft <= 90) {
+                cntDue++;
+            }
         } else if (daysLeft < 0 || rawSt === 'expired' || rawSt === 'lost') {
-            // Only count expired if within last 90 days
             if (daysLeft >= -90) cntExpired++;
         } else {
             cntActive++;
-            if (daysLeft <= 30) {
-                cntDue++;
-            }
         }
     });
+
 
     const tabsRow = document.getElementById('renewals-tabs-row');
     if (tabsRow) {
@@ -1278,46 +1626,66 @@ function renderRenewals() {
         const tActive = tabsRow.querySelector('[data-status="active"]');
         if (tActive) tActive.textContent = `Active (${cntActive})`;
         const tDue = tabsRow.querySelector('[data-status="due"]');
-        if (tDue) tDue.textContent = `Due Soon 30d (${cntDue})`;
+        if (tDue) tDue.textContent = `Due Soon 90d (${cntDue})`;
         const tExpired = tabsRow.querySelector('[data-status="expired"]');
-        if (tExpired) tExpired.textContent = `Expired (${cntExpired})`;
+        if (tExpired) tExpired.textContent = `Expired 90d (${cntExpired})`;
     }
 
     // Filter Items
     let items = rawRenewals;
-    if (statusTab === 'active') {
-        // Active: not draft/expired/lost, and not yet expired
+    // if (statusTab === 'active') {
+    //     // Active: not draft/expired/lost, and not yet expired
+    //     items = items.filter(r => {
+    //         const endDate = r.end_date ? new Date(r.end_date) : null;
+    //         const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+    //         const rawSt = (r.status || 'Active').toLowerCase();
+    //         return rawSt !== 'draft' && rawSt !== 'expired' && rawSt !== 'lost' && daysLeft >= 0;
+    //     });
+    // } else if (statusTab === 'due') {
+    //     // Due Soon 90d: expiring within next 90 days
+    //     items = items.filter(r => {
+    //         const endDate = r.end_date ? new Date(r.end_date) : null;
+    //         const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+    //         const rawSt = (r.status || 'Active').toLowerCase();
+    //         return rawSt !== 'draft' && rawSt !== 'expired' && rawSt !== 'lost' && daysLeft <= 90 && daysLeft >= 0;
+    //     });
+    // } else if (statusTab === 'expired') {
+    //     // Show only renewals expired within the last 30 days
+    //     items = items.filter(r => {
+    //         const endDate = r.end_date ? new Date(r.end_date) : null;
+    //         const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
+    //         const rawSt = (r.status || '').toLowerCase();
+    //         const isExpiredStatus = rawSt === 'expired' || rawSt === 'lost';
+    //         // Must be past end_date AND within last 90 days
+    //         return daysLeft < 0 && daysLeft >= -90 || (isExpiredStatus && daysLeft >= -90);
+    //     });
+    // }
+
+        if (statusTab === 'active') {
         items = items.filter(r => {
+            const rawSt = (r.status || 'Active').toLowerCase();
+            if (rawSt === 'active') return true; // Keep active records in Active tab
             const endDate = r.end_date ? new Date(r.end_date) : null;
             const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
-            const rawSt = (r.status || 'Active').toLowerCase();
             return rawSt !== 'draft' && rawSt !== 'expired' && rawSt !== 'lost' && daysLeft >= 0;
         });
-    } else if (statusTab === 'due') {
-        // Due Soon 30d: expiring within next 30 days
-        items = items.filter(r => {
-            const endDate = r.end_date ? new Date(r.end_date) : null;
-            const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
-            const rawSt = (r.status || 'Active').toLowerCase();
-            return rawSt !== 'draft' && rawSt !== 'expired' && rawSt !== 'lost' && daysLeft <= 30 && daysLeft >= 0;
-        });
     } else if (statusTab === 'expired') {
-        // Show only renewals expired within the last 90 days
         items = items.filter(r => {
+            const rawSt = (r.status || '').toLowerCase();
+            if (rawSt === 'active') return false; // Prevent active records from showing under expired tab
             const endDate = r.end_date ? new Date(r.end_date) : null;
             const daysLeft = endDate ? Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)) : 999;
-            const rawSt = (r.status || '').toLowerCase();
             const isExpiredStatus = rawSt === 'expired' || rawSt === 'lost';
-            // Must be past end_date AND within last 90 days
-            return daysLeft < 0 && daysLeft >= -90 || (isExpiredStatus && daysLeft >= -90);
+            return (daysLeft < 0 && daysLeft >= -90) || (isExpiredStatus && daysLeft >= -90);
         });
     }
 
+
     if (search) {
+        const terms = search.split(/\s+/).filter(Boolean);
         items = items.filter(r => {
-            const dispSt = getRenewalDisplayStatus(r);
-            const txt = `${r.name || ''} ${r.product_name || ''} ${r.invoice_no || ''} ${r.sales_user || ''} ${r.company || ''} ${r.total_amount || ''} ${dispSt}`.toLowerCase();
-            return txt.includes(search);
+            const fullText = getRenewalSearchableText(r);
+            return terms.every(term => fullText.includes(term));
         });
     }
 
@@ -1342,10 +1710,25 @@ function renderRenewals() {
 
         let daysBadgeClass = 'pill blue';
         let daysLabel = '-';
+        // if (daysLeft !== null) {
+        //     if (daysLeft < 0) {
+        //         daysBadgeClass = 'pill red';
+        //         daysLabel = `${Math.abs(daysLeft)} Days Ago`;
+        //     } else if (daysLeft <= 7) {
+        //         daysBadgeClass = 'pill red';
+        //         daysLabel = `${daysLeft} Days Left`;
+        //     } else if (daysLeft <= 30) {
+        //         daysBadgeClass = 'pill orange';
+        //         daysLabel = `${daysLeft} Days Left`;
+        //     } else {
+        //         daysBadgeClass = 'pill green';
+        //         daysLabel = `${daysLeft} Days Left`;
+        //     }
+        // }
         if (daysLeft !== null) {
             if (daysLeft < 0) {
                 daysBadgeClass = 'pill red';
-                daysLabel = `${Math.abs(daysLeft)} Days Ago`;
+                daysLabel = `${daysLeft} Days Ago`;
             } else if (daysLeft <= 7) {
                 daysBadgeClass = 'pill red';
                 daysLabel = `${daysLeft} Days Left`;
@@ -1477,57 +1860,94 @@ function openRenewalDetail(ren, skipHash) {
     }
 }
 
+// Helper to extract comprehensive searchable text from an invoice and its child tables
+function getInvoiceSearchableText(inv) {
+    if (!inv || typeof inv !== 'object') return '';
+    const tokens = [];
+
+    function extract(val) {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            tokens.push(String(val));
+            return;
+        }
+        if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) {
+                extract(val[i]);
+            }
+            return;
+        }
+        if (typeof val === 'object') {
+            for (const k of Object.keys(val)) {
+                if (typeof val[k] === 'function') continue;
+                extract(val[k]);
+            }
+        }
+    }
+
+    extract(inv);
+
+    // Also include formatted representations that a user might search by
+    try {
+        const dispSt = getInvoiceDisplayStatus(inv);
+        if (dispSt) tokens.push(dispSt);
+        if (inv.posting_date) tokens.push(formatDate(inv.posting_date));
+        if (inv.due_date) tokens.push(formatDate(inv.due_date));
+        if (inv.grand_total != null) tokens.push(formatCurrency(inv.grand_total));
+        if (inv.outstanding_amount != null) tokens.push(formatCurrency(inv.outstanding_amount));
+        if (inv.net_total != null) tokens.push(formatCurrency(inv.net_total));
+        if (inv.total_taxes_and_charges != null) tokens.push(formatCurrency(inv.total_taxes_and_charges));
+    } catch (e) {
+        // Fallback gracefully
+    }
+
+    // Strip HTML tags and normalize to lowercase
+    return tokens.join(' ').replace(/<[^>]*>/g, ' ').toLowerCase();
+}
+
 // Invoices & Detail Render with Filtering & Pagination
 function renderInvoices() {
     const tbody = document.getElementById('invoices-tbody');
     if (!tbody || !portalData) return;
 
     const rawInvoices = portalData.invoices || [];
-    const search = listState.invoices.search.toLowerCase();
+    const search = (listState.invoices.search || '').toLowerCase().trim();
     const statusTab = listState.invoices.status;
 
     // Compute Tab Counts
-    let cntAll = rawInvoices.length;
-    let cntUnpaid = 0, cntPaid = 0, cntOverdue = 0;
+    let cntPaid = 0, cntPending = 0;
     rawInvoices.forEach(inv => {
         const st = getInvoiceDisplayStatus(inv).toLowerCase();
         if (st === 'paid') cntPaid++;
-        else if (st === 'overdue') cntOverdue++;
-        else if (st === 'unpaid') cntUnpaid++;
+        else cntPending++;
     });
 
     const tabsRow = document.getElementById('invoices-tabs-row');
     if (tabsRow) {
         tabsRow.querySelectorAll('.tab').forEach(t => {
-            const st = t.getAttribute('data-status') || 'all';
+            const st = t.getAttribute('data-status') || 'pending';
             if (st === statusTab) t.classList.add('on');
             else t.classList.remove('on');
         });
-        const tAll = tabsRow.querySelector('[data-status="all"]');
-        if (tAll) tAll.textContent = `All (${cntAll})`;
-        const tUnpaid = tabsRow.querySelector('[data-status="unpaid"]');
-        if (tUnpaid) tUnpaid.textContent = `Unpaid (${cntUnpaid})`;
+        const tPending = tabsRow.querySelector('[data-status="pending"]');
+        if (tPending) tPending.textContent = `Pending (${cntPending})`;
         const tPaid = tabsRow.querySelector('[data-status="paid"]');
         if (tPaid) tPaid.textContent = `Paid (${cntPaid})`;
-        const tOverdue = tabsRow.querySelector('[data-status="overdue"]');
-        if (tOverdue) tOverdue.textContent = `Overdue (${cntOverdue})`;
     }
 
     // Filter Items
     let items = rawInvoices;
-    if (statusTab === 'unpaid') {
-        items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() === 'unpaid');
+    if (statusTab === 'pending') {
+        items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() !== 'paid');
     } else if (statusTab === 'paid') {
         items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() === 'paid');
-    } else if (statusTab === 'overdue') {
-        items = items.filter(inv => getInvoiceDisplayStatus(inv).toLowerCase() === 'overdue');
     }
 
     if (search) {
+        const terms = search.split(/\s+/).filter(Boolean);
         items = items.filter(inv => {
-            const dispSt = getInvoiceDisplayStatus(inv);
-            const txt = `${inv.name || ''} ${inv.posting_date || ''} ${inv.due_date || ''} ${inv.grand_total || ''} ${dispSt}`.toLowerCase();
-            return txt.includes(search);
+            const fullText = getInvoiceSearchableText(inv);
+            return terms.every(term => fullText.includes(term));
         });
     }
 
@@ -1888,23 +2308,73 @@ function downloadInvoicePdf(invoiceName) {
     });
 }
 
+// Helper to extract comprehensive searchable text from a ticket and its child details
+function getTicketSearchableText(ticket) {
+    if (!ticket || typeof ticket !== 'object') return '';
+    const tokens = [];
+
+    function extract(val) {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            tokens.push(String(val));
+            return;
+        }
+        if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) {
+                extract(val[i]);
+            }
+            return;
+        }
+        if (typeof val === 'object') {
+            for (const k of Object.keys(val)) {
+                if (typeof val[k] === 'function') continue;
+                extract(val[k]);
+            }
+        }
+    }
+
+    extract(ticket);
+
+    // Formatted representations
+    try {
+        const dispSt = getTicketDisplayStatus(ticket);
+        if (dispSt) tokens.push(dispSt);
+        if (ticket.creation) tokens.push(formatDate(ticket.creation));
+        if (ticket.modified) tokens.push(formatDate(ticket.modified));
+        if (ticket.resolution_by) tokens.push(formatDate(ticket.resolution_by));
+        if (ticket.response_by) tokens.push(formatDate(ticket.response_by));
+    } catch (e) {}
+
+    // Strip HTML tags and normalize to lowercase
+    return tokens.join(' ').replace(/<[^>]*>/g, ' ').toLowerCase();
+}
+
 // Tickets & Detail Render with Filtering & Pagination
 function renderTickets() {
     const tbody = document.getElementById('tickets-tbody');
     if (!tbody || !portalData) return;
 
     const rawTickets = portalData.support?.tickets || portalData.tickets || [];
-    const search = listState.tickets.search.toLowerCase();
+    const search = (listState.tickets.search || '').toLowerCase().trim();
     const statusTab = listState.tickets.status;
 
     // Compute Tab Counts
     let cntAll = rawTickets.length;
-    let cntOpen = 0, cntClosed = 0;
+    let cntOpen = 0, cntEscalated = 0, cntClosed = 0;
     rawTickets.forEach(t => {
         const st = getTicketDisplayStatus(t).toLowerCase();
-        if (st === 'closed' || st === 'resolved') cntClosed++;
+        if (st === 'oem escalated') cntEscalated++;
+        else if (st === 'closed' || st === 'resolved') cntClosed++;
         else cntOpen++;
     });
+
+    // Update KPI Card numbers in the UI
+    const elOpen = document.getElementById('tkt-kpi-open');
+    if (elOpen) elOpen.textContent = String(cntOpen);
+    const elEscalated = document.getElementById('tkt-kpi-escalated');
+    if (elEscalated) elEscalated.textContent = String(cntEscalated);
+    const elClosed = document.getElementById('tkt-kpi-closed');
+    if (elClosed) elClosed.textContent = String(cntClosed);
 
     const tabsRow = document.getElementById('tickets-tabs-row');
     if (tabsRow) {
@@ -1917,6 +2387,8 @@ function renderTickets() {
         if (tAll) tAll.textContent = `All (${cntAll})`;
         const tOpen = tabsRow.querySelector('[data-status="open"]');
         if (tOpen) tOpen.textContent = `Open (${cntOpen})`;
+        const tEscalated = tabsRow.querySelector('[data-status="escalated"]');
+        if (tEscalated) tEscalated.textContent = `Vendor Escalation (${cntEscalated})`;
         const tClosed = tabsRow.querySelector('[data-status="closed"]');
         if (tClosed) tClosed.textContent = `Closed (${cntClosed})`;
     }
@@ -1926,7 +2398,12 @@ function renderTickets() {
     if (statusTab === 'open') {
         items = items.filter(t => {
             const st = getTicketDisplayStatus(t).toLowerCase();
-            return st !== 'closed' && st !== 'resolved';
+            return st !== 'closed' && st !== 'resolved' && st !== 'oem escalated';
+        });
+    } else if (statusTab === 'escalated') {
+        items = items.filter(t => {
+            const st = getTicketDisplayStatus(t).toLowerCase();
+            return st === 'oem escalated';
         });
     } else if (statusTab === 'closed') {
         items = items.filter(t => {
@@ -1936,10 +2413,10 @@ function renderTickets() {
     }
 
     if (search) {
+        const terms = search.split(/\s+/).filter(Boolean);
         items = items.filter(t => {
-            const dispSt = getTicketDisplayStatus(t);
-            const txt = `${t.name || ''} ${t.subject || ''} ${t.custom_query_type || t.category || ''} ${t.priority || ''} ${dispSt} ${t.raised_by || ''}`.toLowerCase();
-            return txt.includes(search);
+            const fullText = getTicketSearchableText(t);
+            return terms.every(term => fullText.includes(term));
         });
     }
 
@@ -5329,6 +5806,7 @@ function cpHandleFiles(files) {
                 callback: function (r) {
                     if (r.message && r.message.status === 'success') {
                         cpUploadedFiles.push({
+                            name: r.message.name,
                             file_name: file.name,
                             file_url: r.message.file_url
                         });
@@ -5407,7 +5885,11 @@ function submitTicket() {
         btn.innerHTML = '<i class="ti ti-loader spin"></i> Submitting Ticket...';
     }
 
-    const attachmentUrls = cpUploadedFiles.map(f => f.file_url);
+    const attachmentsPayload = cpUploadedFiles.map(f => ({
+        name: f.name,
+        file_name: f.file_name,
+        file_url: f.file_url
+    }));
 
     frappe.call({
         method: "customer_portal.api.create_support_ticket",
@@ -5424,9 +5906,10 @@ function submitTicket() {
             contact_person: contactPersonStr,
             contacts: JSON.stringify(contactsPayload),
             raised_via_channel: "Customer Portal",
-            attachments: attachmentUrls
+            attachments: attachmentsPayload
         },
         callback: function (r) {
+            console.log("args",r)
             if (btn) {
                 btn.disabled = false;
                 btn.innerHTML = '<i class="ti ti-send"></i> Submit Ticket Now';
@@ -5709,6 +6192,8 @@ function renderAccountContacts() {
             avatarEl = cel('div', { class: 'pf-contact-avatar', style: `background:${avatarColor};` }, [document.createTextNode(initial)]);
         }
 
+        const hasPortal = Boolean(c.has_portal_access === 1 || c.has_portal_access === true || c.portal_access === 1 || c.portal_access === true);
+
         const card = cel('div', { class: 'pf-contact-card' }, [
             // Top Avatar & Title Row
             cel('div', { class: 'pf-contact-card-top' }, [
@@ -5726,7 +6211,7 @@ function renderAccountContacts() {
                 ].filter(Boolean))
             ]),
 
-            // Details List (Email & Phone)
+            // Details List (Email, Phone & Portal Access)
             cel('div', { class: 'pf-contact-details-list' }, [
                 cel('div', { class: 'pf-contact-detail-item' }, [
                     cel('i', { class: 'ti ti-mail' }),
@@ -5735,8 +6220,17 @@ function renderAccountContacts() {
                 cel('div', { class: 'pf-contact-detail-item' }, [
                     cel('i', { class: 'ti ti-phone' }),
                     cel('span', { textContent: phoneText })
-                ])
-            ])
+                ]),
+                hasPortal ? cel('div', { class: 'pf-contact-detail-item pf-contact-portal-access', style: 'margin-top:6px;padding-top:6px;border-top:1px dashed var(--line,#e2e8f0);' }, [
+                    cel('span', {
+                        class: 'portal-access-badge',
+                        style: 'display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:#059669;background:#ecfdf5;border:1px solid #a7f3d0;padding:3px 9px;border-radius:6px;'
+                    }, [
+                        cel('i', { class: 'ti ti-shield-check', style: 'font-size:13.5px;color:#059669;' }),
+                        cel('span', { textContent: 'Portal Access Active' })
+                    ])
+                ]) : null
+            ].filter(Boolean))
         ]);
 
         gridDiv.appendChild(card);
@@ -5963,22 +6457,6 @@ function setupEventListeners() {
         });
     }
 
-    const globalSearch = document.getElementById('global-search-input');
-    if (globalSearch) {
-        globalSearch.addEventListener('input', function () {
-            const val = this.value;
-            listState.renewals.search = val;
-            listState.invoices.search = val;
-            listState.tickets.search = val;
-            listState.renewals.limit = getPageSize('renewals');
-            listState.invoices.limit = getPageSize('invoices');
-            listState.tickets.limit = getPageSize('tickets');
-            renderRenewals();
-            renderInvoices();
-            renderTickets();
-        });
-    }
-
     // Status Tab Row Listeners
     ['renewals', 'invoices', 'tickets'].forEach(pageName => {
         const tabsRow = document.getElementById(`${pageName}-tabs-row`);
@@ -5998,11 +6476,15 @@ function setupEventListeners() {
         }
     });
 
-    // Dismiss account dropdown when clicking outside
+    // Dismiss dropdowns when clicking outside
     document.addEventListener('click', function (e) {
-        const isClickInside = e.target.closest('.pf-account-dropdown') || e.target.closest('#topbar-avatar') || e.target.closest('#side-acct-btn');
-        if (!isClickInside) {
+        const isAccountClick = e.target.closest('.pf-account-dropdown') || e.target.closest('#topbar-avatar') || e.target.closest('#side-acct-btn');
+        if (!isAccountClick) {
             closeAccountDropdown();
+        }
+        const isNotifClick = e.target.closest('.pf-notification-dropdown') || e.target.closest('#topbar-bell-btn');
+        if (!isNotifClick) {
+            closeNotificationDropdown();
         }
     });
 
@@ -6022,6 +6504,21 @@ function setupEventListeners() {
 
 // Auto-initialize on page load
 document.addEventListener('DOMContentLoaded', function () {
+    if (window.frappe && window.frappe.session && window.frappe.session.user === "Guest") {
+        window.location.replace('/login');
+        return;
+    }
+    // Instantly show the target section matching current URL or hash (avoids dashboard flicker)
+    handleUrlRoute();
     setupEventListeners();
     fetchPortalData();
+});
+
+// Detect browser back/forward navigation or bfcache restoration after logout
+window.addEventListener('pageshow', function (event) {
+    if (event.persisted || (window.frappe && window.frappe.session && window.frappe.session.user === "Guest")) {
+        if (!window.frappe || !window.frappe.session || window.frappe.session.user === "Guest") {
+            window.location.replace('/login');
+        }
+    }
 });

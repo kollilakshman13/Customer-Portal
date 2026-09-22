@@ -608,21 +608,62 @@ def create_support_ticket(
                 attachments = []
         if isinstance(attachments, list):
             frappe.flags.ignore_permissions = True
-            for file_url in attachments:
-                if file_url and isinstance(file_url, str):
-                    file_names = frappe.get_all("File", filters={"file_url": file_url}, fields=["name"], ignore_permissions=True)
-                    if not file_names:
-                        fname = file_url.split('/')[-1]
-                        file_names = frappe.get_all("File", filters=[["File", "file_name", "like", f"%{fname}%"]], fields=["name"], ignore_permissions=True)
-                    for f in file_names:
+            for att in attachments:
+                if not att:
+                    continue
+                file_doc_name = None
+                file_url_val = None
+                
+                if isinstance(att, dict):
+                    file_doc_name = att.get("name") or att.get("file_id")
+                    file_url_val = att.get("file_url")
+                elif isinstance(att, str):
+                    if frappe.db.exists("File", att):
+                        file_doc_name = att
+                    else:
+                        file_url_val = att
+
+                # If we have a direct File document name, attach it safely
+                if file_doc_name and frappe.db.exists("File", file_doc_name):
+                    try:
+                        frappe.db.set_value("File", file_doc_name, {
+                            "attached_to_doctype": "Issue",
+                            "attached_to_name": issue.name,
+                            "is_private": 0
+                        }, update_modified=False)
+                    except Exception as ex:
+                        frappe.log_error(f"Failed to update file {file_doc_name}: {ex}")
+                elif file_url_val and isinstance(file_url_val, str):
+                    # Safe fallback: find ONLY an unattached or newly uploaded file owned by current user
+                    # NEVER reattach files that belong to another document, and NEVER attach multiple files!
+                    candidate_files = frappe.db.sql("""
+                        SELECT name FROM `tabFile`
+                        WHERE file_url = %(file_url)s
+                          AND owner = %(user)s
+                          AND (attached_to_name IS NULL OR attached_to_name = '' OR attached_to_name = %(issue)s)
+                        ORDER BY creation DESC
+                        LIMIT 1
+                    """, {"file_url": file_url_val, "user": user, "issue": issue.name}, as_dict=True)
+                    if not candidate_files:
+                        fname = file_url_val.split('/')[-1]
+                        candidate_files = frappe.db.sql("""
+                            SELECT name FROM `tabFile`
+                            WHERE file_name = %(file_name)s
+                              AND owner = %(user)s
+                              AND (attached_to_name IS NULL OR attached_to_name = '' OR attached_to_name = %(issue)s)
+                            ORDER BY creation DESC
+                            LIMIT 1
+                        """, {"file_name": fname, "user": user, "issue": issue.name}, as_dict=True)
+                    if candidate_files:
+                        target_file_name = candidate_files[0]["name"]
                         try:
-                            frappe.db.set_value("File", f["name"], {
+                            frappe.db.set_value("File", target_file_name, {
                                 "attached_to_doctype": "Issue",
                                 "attached_to_name": issue.name,
                                 "is_private": 0
                             }, update_modified=False)
                         except Exception as ex:
-                            frappe.log_error(f"Failed to update file {f['name']}: {ex}")
+                            frappe.log_error(f"Failed to update file {target_file_name}: {ex}")
             frappe.flags.ignore_permissions = False
 
     frappe.db.commit()
@@ -1380,9 +1421,15 @@ def add_ticket_reply(ticket_name, comment_text, attachments=None):
                     "attached_to_name": ticket_name
                 }, update_modified=False)
             elif f_url:
-                file_docs = frappe.get_all("File", filters={"file_url": f_url}, fields=["name"])
-                for fd in file_docs:
-                    frappe.db.set_value("File", fd.name, {
+                candidate_files = frappe.db.sql("""
+                    SELECT name FROM `tabFile`
+                    WHERE file_url = %(file_url)s
+                      AND (attached_to_name IS NULL OR attached_to_name = '' OR attached_to_name = %(ticket)s)
+                    ORDER BY creation DESC
+                    LIMIT 1
+                """, {"file_url": f_url, "ticket": ticket_name}, as_dict=True)
+                if candidate_files:
+                    frappe.db.set_value("File", candidate_files[0]["name"], {
                         "attached_to_doctype": "Issue",
                         "attached_to_name": ticket_name
                     }, update_modified=False)

@@ -9,6 +9,44 @@
   rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont/dist/tabler-icons.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<script>
+  (function() {
+    try {
+      var raw = window.location.pathname.replace(/^.*\/customer-portal\/?/, '') || window.location.hash.replace('#', '').trim();
+      var seg = (raw.split('/')[0] || '').toLowerCase();
+      var valid = ['tickets', 'renewals', 'invoices', 'account', 'ticket-new', 'dashboard'];
+      var tab = (valid.indexOf(seg) !== -1) ? seg : 'dashboard';
+      var pageId = (tab === 'ticket-new') ? 'ticket-new' : tab;
+      
+      // Inject CSS rule synchronously so the browser engine immediately displays only the target section on first paint
+      var style = document.createElement('style');
+      style.id = 'cp-early-route-style';
+      style.textContent = '#page-' + pageId + ' { display: block !important; }';
+      document.head.appendChild(style);
+
+      document.addEventListener('DOMContentLoaded', function() {
+        var pages = document.querySelectorAll('.page');
+        pages.forEach(function(p) { p.classList.remove('on'); });
+        var targetPage = document.getElementById('page-' + pageId);
+        if (targetPage) targetPage.classList.add('on');
+
+        var navTarget = (tab === 'ticket-new') ? 'tickets' : tab;
+        var navLinks = document.querySelectorAll('.side-nav a');
+        navLinks.forEach(function(a) {
+          var oc = a.getAttribute('onclick') || '';
+          if (oc.indexOf("'" + navTarget + "'") !== -1) {
+            a.classList.add('on');
+          } else {
+            a.classList.remove('on');
+          }
+        });
+        
+        var el = document.getElementById('cp-early-route-style');
+        if (el) el.remove();
+      });
+    } catch(e) {}
+  })();
+</script>
 {% endblock %}
 
 {% block navbar %}{% endblock %}
@@ -32,7 +70,7 @@
           class="ti ti-x"></i></button>
     </div>
     <nav class="side-nav">
-      <a class="on" onclick="go('dashboard',this)"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+      <a onclick="go('dashboard',this)"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
       <a onclick="go('tickets',this)"><i class="ti ti-ticket"></i> Tickets</a>
       <a onclick="go('renewals',this)"><i class="ti ti-refresh"></i> Renewals</a>
       <a onclick="go('invoices',this)"><i class="ti ti-file-invoice"></i> Invoices</a>
@@ -46,8 +84,7 @@
           <span id="side-user-sub" title="{{ customer_name or user_email or '' }}">{{ customer_name or user_email or ''
             }}</span>
         </div>
-        <i class="ti ti-chevron-up"
-          style="color:rgba(255,255,255,0.75);font-size:16px;margin-left:auto;flex-shrink:0;"></i>
+        <i class="ti ti-chevron-up"></i>
         <div class="pf-account-dropdown" id="side-account-dropdown" onclick="event.stopPropagation()">
           <div class="pf-acc-header">
             <div class="pf-acc-user-name" id="drop-side-user-name" title="{{ customer_name or 'User' }}">{{
@@ -83,8 +120,32 @@
           <span class="av-name" id="admin-viewing-cust-name">-</span>
           <button type="button" class="av-switch-btn"><i class="ti ti-arrows-exchange"></i> Switch</button>
         </div>
-        <div class="search-box"><i class="ti ti-search"></i><input id="global-search-input" placeholder="Search…"></div>
-        <i class="ti ti-bell bell"></i>
+
+        <!-- Notifications Bell & Dropdown -->
+        <div class="topbar-notif-wrapper" id="topbar-notif-wrapper" style="position:relative;">
+          <button type="button" class="topbar-bell-btn" id="topbar-bell-btn" onclick="toggleNotificationDropdown(event)" title="Notifications" aria-label="Notifications">
+            <i class="ti ti-bell"></i>
+            <span class="bell-badge" id="topbar-bell-badge" style="display:none;">0</span>
+          </button>
+          <div class="pf-notification-dropdown" id="topbar-notification-dropdown" onclick="event.stopPropagation()">
+            <div class="pf-notif-header">
+              <div class="pf-notif-header-left">
+                <span class="pf-notif-title">Notifications</span>
+                <span class="pf-notif-count-pill" id="notif-count-pill">0 New</span>
+              </div>
+              <button type="button" class="pf-notif-mark-read" id="notif-mark-read-btn" onclick="markAllNotificationsAsRead(event)">Mark all read</button>
+            </div>
+            <div class="pf-notif-list" id="topbar-notif-list">
+              <div class="pf-notif-empty">
+                <i class="ti ti-bell-off" style="font-size:28px;color:#94a3b8;margin-bottom:8px;display:block;"></i>
+                No notifications right now.
+              </div>
+            </div>
+            <div class="pf-notif-footer">
+              <span>Account alerts updated in real-time</span>
+            </div>
+          </div>
+        </div>
         <div class="avatar" id="topbar-avatar" style="cursor:pointer;" onclick="toggleAccountDropdown(event, 'topbar')"
           title="{{ customer_name or 'User' }}">{{ customer_name[0] if customer_name else 'C' }}</div>
         <div class="pf-account-dropdown" id="topbar-account-dropdown" onclick="event.stopPropagation()">
@@ -125,7 +186,7 @@
       </div>
 
       <!-- ===== DASHBOARD ===== -->
-      <div class="page on" id="page-dashboard">
+      <div class="page" id="page-dashboard">
         <!-- Dashboard Header Row -->
         <div class="db-header-row">
           <div>
@@ -164,17 +225,17 @@
           <div class="card db-stat-card" style="cursor:pointer;" onclick="go('renewals', 'due')">
             <div class="db-card-top">
               <div class="db-card-title">Upcoming Renewals <i class="ti ti-info-circle"
-                  title="Licenses expiring within the next 30 days"></i></div>
+                  title="Licenses expiring within the next 90 days"></i></div>
               <div class="db-icon-box orange"><i class="ti ti-calendar"></i></div>
             </div>
             <div class="db-stat-num" id="db-stat-upcoming-renewals">0</div>
-            <div class="db-stat-sub orange">Within 30 Days</div>
+            <div class="db-stat-sub orange">Within 90 Days</div>
             <a class="db-card-link" onclick="event.stopPropagation(); go('renewals', 'due')">View Renewals <i
                 class="ti ti-arrow-right"></i></a>
           </div>
 
           <!-- Card 3: Outstanding Invoices -->
-          <div class="card db-stat-card" style="cursor:pointer;" onclick="go('invoices', 'unpaid')">
+          <div class="card db-stat-card" style="cursor:pointer;" onclick="go('invoices', 'pending')">
             <div class="db-card-top">
               <div class="db-card-title">Outstanding Invoices <i class="ti ti-info-circle"
                   title="Unpaid invoice total balance"></i></div>
@@ -182,7 +243,7 @@
             </div>
             <div class="db-stat-num" id="db-stat-outstanding-amount">₹0</div>
             <div class="db-stat-sub red" id="db-stat-open-invoices-count">0 Invoices</div>
-            <a class="db-card-link" onclick="event.stopPropagation(); go('invoices', 'unpaid')">View Invoices <i
+            <a class="db-card-link" onclick="event.stopPropagation(); go('invoices', 'pending')">View Invoices <i
                 class="ti ti-arrow-right"></i></a>
           </div>
 
@@ -274,15 +335,15 @@
           <div class="card">
             <div class="card-head">
               <h3>Outstanding Invoices</h3>
-              <a onclick="go('invoices', 'unpaid')">View All</a>
+              <a onclick="go('invoices', 'pending')">View All</a>
             </div>
             <div class="db-invoices-list" id="db-outstanding-invoices-list">
               <!-- Rendered by JS -->
             </div>
             <div class="db-invoices-footer">
-              <a class="db-card-link" onclick="go('invoices', 'unpaid')">View All Invoices <i
+              <a class="db-card-link" onclick="go('invoices', 'pending')">View All Invoices <i
                   class="ti ti-arrow-right"></i></a>
-              <button class="btn primary sm" onclick="go('invoices', 'unpaid')"><i class="ti ti-credit-card"></i> Make
+              <button class="btn primary sm" onclick="go('invoices', 'pending')"><i class="ti ti-credit-card"></i> Make
                 Payment</button>
             </div>
           </div>
@@ -344,12 +405,11 @@
         <div class="toolbar">
           <div class="search-box" style="width:280px;"><i class="ti ti-search"></i><input id="renewals-search-input"
               placeholder="Search renewals…"></div>
-          <button class="btn sm"><i class="ti ti-filter"></i> Filter</button>
         </div>
         <div class="tabs-row" id="renewals-tabs-row">
           <div class="tab on" data-status="active">Active (0)</div>
-          <div class="tab" data-status="due">Due Soon 30d (0)</div>
-          <div class="tab" data-status="expired">Expired (0)</div>
+          <div class="tab" data-status="due">Due Soon 90d (0)</div>
+          <div class="tab" data-status="expired">Expired 90d (0)</div>
         </div>
         <div class="card" style="padding:6px 20px;">
           <table class="tbl">
@@ -472,13 +532,10 @@
         <div class="toolbar">
           <div class="search-box" style="width:280px;"><i class="ti ti-search"></i><input id="invoices-search-input"
               placeholder="Search invoices…"></div>
-          <button class="btn sm"><i class="ti ti-filter"></i> Filter</button>
         </div>
         <div class="tabs-row" id="invoices-tabs-row">
-          <div class="tab on" data-status="all">All (0)</div>
-          <div class="tab" data-status="unpaid">Unpaid</div>
+          <div class="tab on" data-status="pending">Pending</div>
           <div class="tab" data-status="paid">Paid</div>
-          <div class="tab" data-status="overdue">Overdue</div>
         </div>
         <div class="card" style="padding:6px 20px;">
           <table class="tbl">
@@ -612,10 +669,46 @@
               placeholder="Search tickets…"></div>
           <button class="btn primary sm" onclick="openNewTicketModal()"><i class="ti ti-plus"></i> New Ticket</button>
         </div>
+        <div class="tkt-kpi-grid" style="margin-top: 16px;">
+          <!-- Card 1: Open Tickets -->
+          <div class="card db-stat-card" style="cursor: pointer;"
+            onclick="document.querySelector('#tickets-tabs-row [data-status=\'open\']')?.click();">
+            <div class="db-card-top">
+              <div class="db-card-title">Open Tickets <i class="ti ti-info-circle"
+                  title="Tickets currently open (excludes OEM Escalated, Resolved, or Closed)"></i></div>
+              <div class="db-icon-box orange"><i class="ti ti-ticket"></i></div>
+            </div>
+            <div class="db-stat-num" id="tkt-kpi-open">0</div>
+            <div class="db-stat-sub orange">Active Issues</div>
+          </div>
+          <!-- Card 2: Vendor Escalation -->
+          <div class="card db-stat-card" style="cursor: pointer;"
+            onclick="document.querySelector('#tickets-tabs-row [data-status=\'escalated\']')?.click();">
+            <div class="db-card-top">
+              <div class="db-card-title">Vendor Escalation <i class="ti ti-info-circle"
+                  title="Tickets currently OEM Escalated"></i></div>
+              <div class="db-icon-box red"><i class="ti ti-alert-triangle"></i></div>
+            </div>
+            <div class="db-stat-num" id="tkt-kpi-escalated">0</div>
+            <div class="db-stat-sub red">OEM Escalated</div>
+          </div>
+          <!-- Card 3: Closed Tickets -->
+          <div class="card db-stat-card" style="cursor: pointer;"
+            onclick="document.querySelector('#tickets-tabs-row [data-status=\'closed\']')?.click();">
+            <div class="db-card-top">
+              <div class="db-card-title">Closed Tickets <i class="ti ti-info-circle"
+                  title="Tickets resolved or closed"></i></div>
+              <div class="db-icon-box green"><i class="ti ti-circle-check"></i></div>
+            </div>
+            <div class="db-stat-num" id="tkt-kpi-closed">0</div>
+            <div class="db-stat-sub green">Resolved & Closed</div>
+          </div>
+        </div>
         <div class="tabs-row" id="tickets-tabs-row">
-          <div class="tab on" data-status="all">All (0)</div>
-          <div class="tab" data-status="open">Open</div>
+          <div class="tab on" data-status="open">Open</div>
+          <div class="tab" data-status="escalated">Vendor Escalation</div>
           <div class="tab" data-status="closed">Closed</div>
+          <div class="tab" data-status="all">All (0)</div>
         </div>
         <div class="card">
           <table class="tbl">
@@ -865,7 +958,7 @@
                 <div class="td-empty-msg">No contacts linked to this ticket.</div>
               </div>
             </div>
-            
+
           </div>
         </div>
       </div>
